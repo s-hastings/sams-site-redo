@@ -1,0 +1,870 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sam Hastings — Portfolio</title>
+<meta name="description" content="Portfolio of Sam Hastings. Walk through a moonlit field of glyphs to find the work.">
+<meta name="theme-color" content="#05080a">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Montserrat:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #05080a;
+    --ink: #e8eee9;
+    --dim: rgba(232, 238, 233, 0.56);
+    --faint: rgba(232, 238, 233, 0.28);
+    --mint: #7fe3c0;
+    --amber: #f3c97f;
+    --panel: rgba(5, 11, 11, 0.74);
+    --line: rgba(232, 238, 233, 0.1);
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: "Montserrat", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 13px;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  :focus-visible { outline: 1px solid var(--mint); outline-offset: 3px; }
+
+  #field { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; touch-action: none; }
+
+  /* World-anchored labels */
+  #labels { position: fixed; inset: 0; pointer-events: none; }
+  .nametag {
+    position: absolute; left: 0; top: 0;
+    font-family: var(--sans); font-weight: 500; font-size: 17px; letter-spacing: 0.01em;
+    color: #f4f6f3; white-space: nowrap;
+    text-shadow: 0 0 14px rgba(0,0,0,0.95), 0 0 3px rgba(0,0,0,0.9);
+    opacity: 0; transition: opacity 1.4s ease;
+  }
+  .nametag.on { opacity: 1; }
+  .mlabel {
+    position: absolute; left: 0; top: 0; pointer-events: auto;
+    font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--amber); white-space: nowrap;
+    text-shadow: 0 0 10px rgba(0,0,0,1), 0 0 2px rgba(0,0,0,1);
+    transition: opacity .3s ease;
+  }
+  .mlabel span { color: var(--faint); margin-right: .6em; }
+  .mlabel:hover { color: #fff1d4; }
+
+  /* Chrome */
+  .top {
+    position: fixed; top: 0; left: 0; right: 0;
+    display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap;
+    padding: max(20px, env(safe-area-inset-top)) 24px 0;
+    pointer-events: none;
+    text-shadow: 0 0 12px rgba(0,0,0,0.9);
+  }
+  .top > * { pointer-events: auto; }
+  .brand { font-weight: 500; text-decoration: none; letter-spacing: 0.02em; }
+  .role { color: var(--dim); }
+  .top nav { margin-left: auto; display: flex; gap: 20px; }
+  .top nav button { color: var(--dim); letter-spacing: 0.04em; }
+  .top nav button:hover, .top nav button[aria-expanded="true"] { color: var(--ink); }
+  .top nav button::before { content: "["; color: var(--faint); margin-right: 2px; }
+  .top nav button::after { content: "]"; color: var(--faint); margin-left: 2px; }
+
+  .hud {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    display: flex; justify-content: space-between; gap: 16px;
+    padding: 0 24px max(18px, env(safe-area-inset-bottom));
+    color: var(--dim); font-size: 11px; letter-spacing: 0.06em;
+    pointer-events: none; text-shadow: 0 0 10px rgba(0,0,0,1);
+  }
+  #coords { font-variant-numeric: tabular-nums; }
+
+  /* Project panel (opens when you reach a light) */
+  .panel {
+    position: fixed; right: 24px; top: 50%;
+    width: min(360px, calc(100vw - 48px));
+    transform: translate(16px, -50%); opacity: 0; visibility: hidden;
+    transition: opacity .35s ease, transform .35s ease, visibility 0s linear .35s;
+    background: var(--panel); border: 1px solid var(--line);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    padding: 22px 22px 20px;
+  }
+  .panel.open { opacity: 1; visibility: visible; transform: translate(0, -50%); transition-delay: 0s; }
+  .panel .idx { color: var(--amber); font-size: 11px; letter-spacing: 0.14em; }
+  .panel h2 { font-family: var(--sans); font-weight: 500; font-size: 22px; line-height: 1.2; margin: 10px 0 4px; }
+  .panel .meta { color: var(--dim); font-size: 11.5px; }
+  .panel p { color: rgba(232,238,233,0.82); line-height: 1.65; margin: 16px 0; font-size: 12.5px; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 18px; padding: 0; list-style: none; }
+  .tags li { border: 1px solid var(--line); color: var(--dim); padding: 3px 7px; font-size: 10.5px; }
+  .cta { display: inline-flex; gap: 8px; color: var(--mint); text-decoration: none; font-size: 12px; letter-spacing: 0.04em; }
+  .cta:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+  /* Sheets: work list, about, contact */
+  .sheet {
+    position: fixed; inset: 0; display: grid; place-items: center;
+    background: rgba(3, 6, 7, 0.62);
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    opacity: 0; visibility: hidden;
+    transition: opacity .3s ease, visibility 0s linear .3s;
+    padding: 80px 16px;
+  }
+  .sheet.open { opacity: 1; visibility: visible; transition-delay: 0s; }
+  .sheet .inner { width: min(640px, 100%); max-height: 100%; overflow: auto; }
+  .sheet h2 { font-weight: 400; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--faint); margin: 0 0 22px; }
+  .worklist { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+  .worklist li { border-bottom: 1px solid var(--line); }
+  .worklist button {
+    width: 100%; display: grid; grid-template-columns: 3ch 1fr auto; gap: 18px; align-items: baseline;
+    text-align: left; padding: 16px 2px;
+  }
+  .worklist .n { color: var(--faint); }
+  .worklist .t { font-family: var(--sans); font-size: 19px; }
+  .worklist .y { color: var(--dim); font-size: 11px; }
+  .worklist button:hover .t { color: var(--amber); }
+  .worklist .walk { display: block; font-family: var(--mono); font-size: 11px; color: var(--faint); margin-top: 4px; }
+  .about p { font-family: var(--sans); font-size: 19px; line-height: 1.6; margin: 0 0 22px; color: rgba(232,238,233,0.9); }
+  .about dl { display: grid; grid-template-columns: 12ch 1fr; gap: 10px 18px; margin: 28px 0 0; color: var(--dim); }
+  .about dt { color: var(--faint); }
+  .about dd { margin: 0; }
+  .contact a { display: block; font-family: var(--sans); font-size: 24px; text-decoration: none; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .contact a:hover { color: var(--mint); }
+  .close { position: fixed; top: max(20px, env(safe-area-inset-top)); right: 24px; color: var(--dim); }
+  .close:hover { color: var(--ink); }
+
+  [hidden] { display: none !important; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  @media (max-width: 700px) {
+    body { font-size: 12px; }
+    .top { padding: max(16px, env(safe-area-inset-top)) 16px 0; gap: 4px 14px; }
+    .role { display: none; }
+    .top nav { gap: 14px; }
+    .hud { padding: 0 16px max(14px, env(safe-area-inset-bottom)); }
+    #coords { display: none; }
+    .panel {
+      right: 16px; left: 16px; top: auto; bottom: max(44px, calc(env(safe-area-inset-bottom) + 34px));
+      width: auto; transform: translateY(16px);
+    }
+    .panel.open { transform: none; }
+    .about p { font-size: 16px; }
+    .about dl { grid-template-columns: 1fr; gap: 2px; }
+    .about dd { margin-bottom: 10px; }
+    .close { right: 16px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .panel, .sheet, .nametag { transition: none; }
+  }
+</style>
+</head>
+<body>
+  <canvas id="field" aria-hidden="true"></canvas>
+  <div id="labels" aria-hidden="true"></div>
+
+  <header class="top">
+    <a class="brand" href="#" id="brand">sam hastings</a>
+    <span class="role" id="role">designer &amp; developer</span>
+    <nav aria-label="Main">
+      <button type="button" data-open="work" aria-expanded="false" aria-controls="work">work</button>
+      <button type="button" data-open="about" aria-expanded="false" aria-controls="about">about</button>
+      <button type="button" data-open="contact" aria-expanded="false" aria-controls="contact">contact</button>
+    </nav>
+  </header>
+
+  <aside class="panel" id="project" aria-live="polite" aria-label="Project">
+    <div class="idx" id="p-idx"></div>
+    <h2 id="p-title"></h2>
+    <div class="meta" id="p-meta"></div>
+    <p id="p-desc"></p>
+    <ul class="tags" id="p-tags"></ul>
+    <a class="cta" id="p-link" href="#" target="_blank" rel="noopener">view project <span aria-hidden="true">→</span></a>
+  </aside>
+
+  <section class="sheet" id="work" aria-label="Work" aria-hidden="true">
+    <div class="inner">
+      <h2>Selected work — pick one and walk there</h2>
+      <ul class="worklist" id="worklist"></ul>
+    </div>
+  </section>
+
+  <section class="sheet" id="about" aria-label="About" aria-hidden="true">
+    <div class="inner about" id="aboutbody"></div>
+  </section>
+
+  <section class="sheet" id="contact" aria-label="Contact" aria-hidden="true">
+    <div class="inner contact">
+      <h2>Say hello</h2>
+      <div id="contactlinks"></div>
+    </div>
+  </section>
+
+  <button type="button" class="close" id="close" hidden>[ close ]</button>
+
+  <footer class="hud">
+    <span class="hint" id="hint">click to walk · scroll to zoom · follow the lights</span>
+    <span id="coords" aria-hidden="true"></span>
+  </footer>
+
+<script>
+/* ──────────────────────────────────────────────────────────────
+   Edit your content here.
+   ────────────────────────────────────────────────────────────── */
+const SITE = {
+  name: "Sam Hastings",
+  role: "designer & developer",
+  about: [
+    "I design and build things for the web — interfaces, tools and the occasional strange experiment like this field.",
+    "I care about craft, motion and making software feel calm. Currently open to new projects and collaborations."
+  ],
+  facts: [
+    ["based in", "Somewhere, Earth"],
+    ["focus", "Product design, front-end, creative coding"],
+    ["tools", "Figma, TypeScript, React, WebGL, Canvas"],
+    ["currently", "Taking on freelance work for 2027"]
+  ],
+  email: "hello@example.com",
+  links: [
+    ["GitHub", "https://github.com/s-hastings"],
+    ["LinkedIn", "https://www.linkedin.com/"],
+    ["Read.cv", "https://read.cv/"]
+  ],
+  // `at` = [which path (0 or 1), distance along it]. Lights sit beside the path.
+  projects: [
+    { title: "Lumen", year: "2026", kind: "Product design · Web app",
+      desc: "A calm reading app that turns saved articles into a weekly print-style digest. Led design and built the front-end.",
+      tags: ["Figma", "React", "Typography"], url: "#", at: [0, 620] },
+    { title: "Fieldnotes", year: "2025", kind: "Creative coding",
+      desc: "Generative ASCII landscapes rendered in the browser — the experiment that grew into this site.",
+      tags: ["Canvas", "Noise", "Shaders"], url: "#", at: [0, -680] },
+    { title: "Harbor", year: "2025", kind: "Design system",
+      desc: "A component library and token pipeline shared across four product teams, with docs people actually read.",
+      tags: ["Tokens", "Storybook", "Accessibility"], url: "#", at: [1, 560] },
+    { title: "Tidewater", year: "2024", kind: "Brand · Website",
+      desc: "Identity and marketing site for a small coastal coffee roaster. Hand-drawn type, lots of blue.",
+      tags: ["Branding", "Astro", "Motion"], url: "#", at: [1, -600] },
+    { title: "Signal", year: "2023", kind: "Data visualisation",
+      desc: "A live dashboard for a city transit agency that turns thousands of bus pings into one readable map.",
+      tags: ["D3", "Maps", "Realtime"], url: "#", at: [0, 1500] }
+  ]
+};
+</script>
+
+<script>
+(() => {
+"use strict";
+
+/* ── Setup ─────────────────────────────────────────────────── */
+const canvas = document.getElementById("field");
+const ctx = canvas.getContext("2d", { alpha: false });
+const labelsEl = document.getElementById("labels");
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+document.getElementById("brand").textContent = SITE.name.toLowerCase();
+document.getElementById("role").textContent = SITE.role;
+document.title = SITE.name + " — Portfolio";
+
+const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
+const TAU = Math.PI * 2;
+
+/* Integer hash → [0,1) */
+function h2(x, y, s) {
+  let h = Math.imul(x | 0, 0x27d4eb2d) ^ Math.imul(y | 0, 0x165667b1) ^ Math.imul(s | 0, 0x9e3779b1);
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+/* Smooth value noise → [0,1) */
+function vnoise(x, y, s) {
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const xf = x - xi, yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+  const a = h2(xi, yi, s), b = h2(xi + 1, yi, s), c = h2(xi, yi + 1, s), d = h2(xi + 1, yi + 1, s);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+
+/* ── World: paths, trees, shadows ─────────────────────────── */
+const PATHS = [
+  { ang: -0.30, off: 0,    a1: 110, f1: 1 / 640, a2: 36, f2: 1 / 230, w: 36 },
+  { ang: 1.20,  off: -420, a1: 90,  f1: 1 / 520, a2: 30, f2: 1 / 170, w: 30 }
+];
+let pathDist = 0; // side output of pathField: signed distance to nearest path edge
+function pathField(x, y) {
+  let m = 0; pathDist = 1e9;
+  for (let i = 0; i < PATHS.length; i++) {
+    const p = PATHS[i], c = Math.cos(p.ang), s = Math.sin(p.ang);
+    const u = x * c + y * s;
+    const v = -x * s + y * c - p.off;
+    const center = p.a1 * Math.sin(u * p.f1) + p.a2 * Math.sin(u * p.f2 + 1.3);
+    const d = Math.abs(v - center);
+    const w = p.w * (0.78 + 0.44 * vnoise(u * 0.012, i * 7.3, 7));
+    const k = clamp01((w - d) / 24 + 0.5);
+    if (k > m) m = k;
+    if (d - w < pathDist) pathDist = d - w;
+  }
+  return m;
+}
+function pathPoint(i, u, side) {
+  const p = PATHS[i], c = Math.cos(p.ang), s = Math.sin(p.ang);
+  const v = p.off + p.a1 * Math.sin(u * p.f1) + p.a2 * Math.sin(u * p.f2 + 1.3) + side;
+  return { x: u * c - v * s, y: u * s + v * c };
+}
+
+const SPAWN = pathPoint(0, 0, 0);
+const MARKERS = SITE.projects.map((p, i) => {
+  const pt = pathPoint(p.at[0], p.at[1], (i % 2 ? -1 : 1) * 96);
+  return { ...p, i, x: pt.x, y: pt.y, glow: 0 };
+});
+
+const SUN_X = 0.89, SUN_Y = 0.46;         // shadow direction (sun/moon from upper-left)
+const SHADOW_LEN = 1.25;
+const TSX = 250, TSY = 560;               // tree grid spacing
+const treeCache = new Map();
+function treeAt(gx, gy) {
+  const key = gx * 100003 + gy;
+  if (treeCache.has(key)) return treeCache.get(key);
+  let t = null;
+  if (h2(gx, gy, 11) < 0.78) {
+    const x = (gx + (gy & 1) * 0.5 + 0.25 + 0.5 * h2(gx, gy, 12)) * TSX;
+    const y = (gy + 0.2 + 0.6 * h2(gx, gy, 13)) * TSY;
+    const h = 300 + 170 * h2(gx, gy, 14);
+    const w = h * (0.16 + 0.04 * h2(gx, gy, 15));
+    const trunk = 26 + 16 * h2(gx, gy, 16);
+    pathField(x, y);
+    let ok = pathDist > w * 0.8 + 6;
+    if (ok && Math.hypot(x - SPAWN.x, y - SPAWN.y) < 170) ok = false;
+    for (const m of MARKERS) if (ok && Math.hypot(x - m.x, y - m.y) < 190) ok = false;
+    if (ok) {
+      const L = h * SHADOW_LEN;
+      t = { x, y, h, w, trunk, L, seed: (gx * 31 + gy * 17) & 1023,
+            cx0: x - w * 1.3, cx1: x + w * 1.3, cy0: y - h - 6, cy1: y + 2,
+            sx0: x - w * 1.2, sx1: x + SUN_X * L + w * 1.2, sy0: y - w * 1.2, sy1: y + SUN_Y * L + w * 1.2 };
+    }
+  }
+  treeCache.set(key, t);
+  return t;
+}
+/* Cypress silhouette half-width profile along its height, u in [0,1] */
+function prof(u) {
+  if (u <= 0 || u >= 1) return 0;
+  const a = u < 0.2 ? Math.sqrt(u / 0.2) : 1;
+  return a * Math.pow(1 - u, 0.85) * 1.2;
+}
+
+/* ── The wanderer ─────────────────────────────────────────── */
+const fig = { x: SPAWN.x, y: SPAWN.y, tx: null, ty: null, facing: 1, phase: 0, moving: false };
+const FS = 1.25; // figure scale
+let FB = 0, FK = 0; // side outputs: brightness, kind (0 body, 1 lantern)
+let flicker = 1;
+function figSample(wx, wy) {
+  const lx = (wx - fig.x) * fig.facing / FS, ly = (wy - fig.y) / FS;
+  if (ly > 2 || ly < -92 || lx < -26 || lx > 30) return false;
+  const bob = fig.moving ? Math.abs(Math.sin(fig.phase)) * 2.2 : 0;
+  const yy = ly + bob;
+  const ldx = lx - 20, ldy = yy + 33;
+  if (ldx * ldx + ldy * ldy < 34) { FK = 1; FB = 0.8 + 0.2 * flicker; return true; }
+  const hx = lx - 1, hy = yy + 80;
+  if (hx * hx + hy * hy < 105) { FK = 0; FB = 0.92 - 0.035 * hx + 0.02 * hy; return true; }
+  if (yy >= -71 && yy <= -8) {
+    const t = (yy + 71) / 63;
+    const sway = fig.moving ? Math.sin(fig.phase) * 3.5 * t : 0;
+    const hw = 8 + 12.5 * t;
+    const cx = lx - sway;
+    if (cx > -hw && cx < hw) {
+      FK = 0; FB = 0.8 - 0.32 * (cx / hw) - 0.25 * t + 0.07 * Math.sin(cx * 0.9 + yy * 0.2);
+      return true;
+    }
+  }
+  if (yy > -50 && yy < -34 && lx > 7 && lx < 20) {
+    const ay = -47 + 10 * ((lx - 7) / 13);
+    if (Math.abs(yy - ay) < 3) { FK = 0; FB = 0.62; return true; }
+  }
+  if (yy > -10 && yy <= 0) {
+    const s = fig.moving ? Math.sin(fig.phase) * 5 : 0;
+    if (Math.abs(lx + 5 - s) < 3.2 || Math.abs(lx - 5 + s) < 3.2) { FK = 0; FB = 0.42; return true; }
+  }
+  return false;
+}
+
+/* ── Glyph atlas ──────────────────────────────────────────── */
+const RAMP = " .:-=+*#%@";
+const PATH_CHARS = "@Q08o@Qo8Q@";
+const SHADOW_TEXT = (SITE.about.join(" ") + " " + SITE.projects.map(p => p.title + " " + p.desc).join(" ") + " ")
+  .toLowerCase().replace(/[^\x21-\x7e ]/g, "").replace(/\s+/g, " ").replace(/ /g, () => "  ;:^|!*".charAt(Math.random() * 8 | 0));
+const CHARS = Array.from(new Set((RAMP + PATH_CHARS + SHADOW_TEXT + ":|*+·×").split(""))).join("");
+const CHAR_IX = {}; for (let i = 0; i < CHARS.length; i++) CHAR_IX[CHARS[i]] = i;
+const SHADOW_IX = Array.from(SHADOW_TEXT, c => CHAR_IX[c]);
+const PATH_IX = Array.from(PATH_CHARS, c => CHAR_IX[c]);
+const RAMP_IX = Array.from(RAMP, c => CHAR_IX[c]);
+
+const PALS = [
+  [198, 192, 216], // 0 path — pale lavender
+  [124, 158, 148], // 1 shadow text — grey green
+  [238, 238, 233], // 2 figure — moon white
+  [150, 152, 162], // 3 trunk
+  [255, 204, 126]  // 4 warm lantern / lights
+];
+const LEVELS = 12;
+let atlas, AC = 0; // atlas canvas, atlas cell size (device px)
+function buildAtlas() {
+  AC = Math.ceil(CELL * DPR);
+  atlas = document.createElement("canvas");
+  atlas.width = AC * CHARS.length;
+  atlas.height = AC * PALS.length * LEVELS;
+  const a = atlas.getContext("2d");
+  a.font = `500 ${Math.round(CELL * 1.18 * DPR)}px "JetBrains Mono", ui-monospace, Menlo, monospace`;
+  a.textAlign = "center"; a.textBaseline = "middle";
+  for (let p = 0; p < PALS.length; p++) {
+    for (let l = 0; l < LEVELS; l++) {
+      const k = 0.1 + 0.9 * (l / (LEVELS - 1));
+      const [r, g, b] = PALS[p];
+      a.fillStyle = `rgb(${r * k | 0},${g * k | 0},${b * k | 0})`;
+      const row = (p * LEVELS + l) * AC;
+      for (let c = 0; c < CHARS.length; c++) a.fillText(CHARS[c], c * AC + AC / 2, row + AC / 2 + DPR * 0.5);
+    }
+  }
+}
+
+/* Stroke colour buckets */
+const NB = 20;
+function ramp(dark, bright, gamma) {
+  return Array.from({ length: NB }, (_, i) => {
+    const k = Math.pow(i / (NB - 1), gamma);
+    return `rgb(${dark.map((d, j) => Math.round(d + (bright[j] - d) * k)).join(",")})`;
+  });
+}
+const GRASS_COLS = ramp([8, 28, 30], [120, 226, 192], 1.25);
+const TREE_COLS = ramp([10, 40, 32], [104, 206, 150], 0.95);
+const grassB = Array.from({ length: NB }, () => []);
+const treeB = Array.from({ length: NB }, () => []);
+const glyphs = [];
+
+/* Firefly sprite */
+const glow = document.createElement("canvas");
+glow.width = glow.height = 32;
+{
+  const g = glow.getContext("2d");
+  const rg = g.createRadialGradient(16, 16, 0, 16, 16, 16);
+  rg.addColorStop(0, "rgba(255,250,220,1)");
+  rg.addColorStop(0.18, "rgba(255,240,190,0.55)");
+  rg.addColorStop(1, "rgba(255,230,160,0)");
+  g.fillStyle = rg; g.fillRect(0, 0, 32, 32);
+}
+const flies = Array.from({ length: 46 }, (_, i) => ({ x: (Math.random() - 0.5) * 2400, y: (Math.random() - 0.5) * 1600, s: Math.random() * 100, a: 0 }));
+
+/* ── Camera & sizing ──────────────────────────────────────── */
+let W = 0, H = 0, DPR = 1, CELL = 9, cols = 0, rows = 0, CELL_BUMP = 0, slowFor = 0;
+const cam = { x: SPAWN.x, y: SPAWN.y - 30, z: reduceMotion ? 1.15 : 0.72, zt: 1.15 };
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  CELL = (W < 700 ? 8 : 9) + CELL_BUMP;
+  canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+  cols = Math.ceil(W / CELL) + 2; rows = Math.ceil(H / CELL) + 2;
+  buildAtlas();
+}
+window.addEventListener("resize", resize);
+resize();
+if (document.fonts && document.fonts.load) {
+  document.fonts.load(`16px "JetBrains Mono"`).then(buildAtlas).catch(() => {});
+}
+
+let OX = 0, OY = 0; // snapped camera, in cells
+const toScreen = (wx, wy) => [W / 2 + wx * cam.z - OX * CELL, H / 2 + wy * cam.z - OY * CELL];
+const toWorld = (sx, sy) => [(sx - W / 2 + OX * CELL) / cam.z, (sy - H / 2 + OY * CELL) / cam.z];
+
+/* ── Labels ───────────────────────────────────────────────── */
+const nametag = document.createElement("div");
+nametag.className = "nametag";
+nametag.textContent = SITE.name.split(" ")[0];
+labelsEl.appendChild(nametag);
+setTimeout(() => nametag.classList.add("on"), reduceMotion ? 0 : 900);
+
+MARKERS.forEach(m => {
+  const el = document.createElement("button");
+  el.type = "button";
+  el.className = "mlabel";
+  el.tabIndex = -1;
+  el.innerHTML = `<span>${String(m.i + 1).padStart(2, "0")}</span>`;
+  el.appendChild(document.createTextNode(m.title));
+  el.addEventListener("click", e => { e.stopPropagation(); walkTo(m.x - 64, m.y + 18); });
+  labelsEl.appendChild(el);
+  m.el = el;
+});
+
+/* ── Input ────────────────────────────────────────────────── */
+const keys = new Set();
+function walkTo(x, y) { fig.tx = x; fig.ty = y; }
+canvas.addEventListener("click", e => {
+  const [wx, wy] = toWorld(e.clientX, e.clientY);
+  for (const m of MARKERS) if (Math.hypot(wx - m.x, wy - m.y) < 50) return walkTo(m.x - 64, m.y + 18);
+  walkTo(wx, wy);
+});
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  cam.zt = Math.min(2.2, Math.max(0.6, cam.zt * Math.exp(-e.deltaY * 0.0015)));
+}, { passive: false });
+window.addEventListener("keydown", e => {
+  if (openSheet) { if (e.key === "Escape") closeSheets(); return; }
+  const k = e.key.toLowerCase();
+  if (["arrowup", "arrowdown", "arrowleft", "arrowright", "w", "a", "s", "d"].includes(k)) { keys.add(k); fig.tx = null; e.preventDefault(); }
+  if (k === "+" || k === "=") cam.zt = Math.min(2.2, cam.zt * 1.2);
+  if (k === "-" || k === "_") cam.zt = Math.max(0.6, cam.zt / 1.2);
+});
+window.addEventListener("keyup", e => keys.delete(e.key.toLowerCase()));
+window.addEventListener("blur", () => keys.clear());
+
+/* ── Sheets & panel ───────────────────────────────────────── */
+const closeBtn = document.getElementById("close");
+let openSheet = null, lastFocus = null;
+function openS(id) {
+  closeSheets(true);
+  const el = document.getElementById(id);
+  el.classList.add("open"); el.setAttribute("aria-hidden", "false");
+  document.querySelector(`[data-open="${id}"]`).setAttribute("aria-expanded", "true");
+  closeBtn.hidden = false; openSheet = el; lastFocus = document.activeElement;
+  (el.querySelector("button, a") || closeBtn).focus({ preventScroll: true });
+}
+function closeSheets(silent) {
+  document.querySelectorAll(".sheet.open").forEach(s => { s.classList.remove("open"); s.setAttribute("aria-hidden", "true"); });
+  document.querySelectorAll("[data-open]").forEach(b => b.setAttribute("aria-expanded", "false"));
+  closeBtn.hidden = true;
+  if (openSheet && !silent && lastFocus) lastFocus.focus({ preventScroll: true });
+  openSheet = null;
+}
+document.querySelectorAll("[data-open]").forEach(b => b.addEventListener("click", () => {
+  b.getAttribute("aria-expanded") === "true" ? closeSheets() : openS(b.dataset.open);
+}));
+closeBtn.addEventListener("click", () => closeSheets());
+document.querySelectorAll(".sheet").forEach(s => s.addEventListener("click", e => { if (e.target === s) closeSheets(); }));
+document.getElementById("brand").addEventListener("click", e => { e.preventDefault(); closeSheets(); walkTo(SPAWN.x, SPAWN.y); });
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+document.getElementById("worklist").innerHTML = MARKERS.map(m => `
+  <li><button type="button" data-m="${m.i}">
+    <span class="n">${String(m.i + 1).padStart(2, "0")}</span>
+    <span><span class="t">${esc(m.title)}</span><span class="walk">${esc(m.kind)}</span></span>
+    <span class="y">${esc(m.year)}</span>
+  </button></li>`).join("");
+document.getElementById("worklist").addEventListener("click", e => {
+  const b = e.target.closest("[data-m]"); if (!b) return;
+  const m = MARKERS[+b.dataset.m];
+  closeSheets(true);
+  walkTo(m.x - 64, m.y + 18);
+});
+document.getElementById("aboutbody").innerHTML =
+  SITE.about.map(p => `<p>${esc(p)}</p>`).join("") +
+  `<dl>${SITE.facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`;
+document.getElementById("contactlinks").innerHTML =
+  `<a href="mailto:${esc(SITE.email)}">${esc(SITE.email)}</a>` +
+  SITE.links.map(([l, u]) => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(l)} ↗</a>`).join("");
+
+const panel = document.getElementById("project");
+let activeM = null;
+function showProject(m) {
+  if (m === activeM) return;
+  activeM = m;
+  if (!m) { panel.classList.remove("open"); return; }
+  document.getElementById("p-idx").textContent = `${String(m.i + 1).padStart(2, "0")} / ${String(MARKERS.length).padStart(2, "0")}`;
+  document.getElementById("p-title").textContent = m.title;
+  document.getElementById("p-meta").textContent = `${m.year} · ${m.kind}`;
+  document.getElementById("p-desc").textContent = m.desc;
+  document.getElementById("p-tags").innerHTML = m.tags.map(t => `<li>${esc(t)}</li>`).join("");
+  const link = document.getElementById("p-link");
+  link.href = m.url; link.hidden = !m.url || m.url === "#";
+  panel.classList.add("open");
+}
+
+/* ── Render ───────────────────────────────────────────────── */
+const coordsEl = document.getElementById("coords");
+const canopyList = [], shadowList = [], markerList = [];
+let last = performance.now(), T = 0, introT = 0;
+
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  T += dt; introT += dt;
+  /* Adaptive quality: coarser glyph grid on slow machines */
+  slowFor = dt > 0.034 ? slowFor + dt : Math.max(0, slowFor - dt * 0.5);
+  if (slowFor > 1.5 && CELL_BUMP < 3) { CELL_BUMP++; slowFor = 0; resize(); }
+  flicker = reduceMotion ? 1 : 0.85 + 0.15 * vnoise(T * 6, 0, 5);
+
+  /* Movement */
+  let mx = 0, my = 0;
+  if (keys.has("arrowleft") || keys.has("a")) mx -= 1;
+  if (keys.has("arrowright") || keys.has("d")) mx += 1;
+  if (keys.has("arrowup") || keys.has("w")) my -= 1;
+  if (keys.has("arrowdown") || keys.has("s")) my += 1;
+  const SPEED = 150;
+  fig.moving = false;
+  if (mx || my) {
+    const l = Math.hypot(mx, my);
+    fig.x += mx / l * SPEED * dt; fig.y += my / l * SPEED * dt;
+    if (mx) fig.facing = mx > 0 ? 1 : -1;
+    fig.phase += SPEED * dt * 0.085; fig.moving = true;
+  } else if (fig.tx !== null) {
+    const dx = fig.tx - fig.x, dy = fig.ty - fig.y, d = Math.hypot(dx, dy);
+    if (d > 2) {
+      const step = Math.min(d, SPEED * (d > 600 ? 1.8 : 1) * dt);
+      fig.x += dx / d * step; fig.y += dy / d * step;
+      if (Math.abs(dx) > 2) fig.facing = dx > 0 ? 1 : -1;
+      fig.phase += step * 0.085; fig.moving = true;
+    } else fig.tx = fig.ty = null;
+  }
+
+  /* Camera */
+  const kc = reduceMotion ? 1 : 1 - Math.exp(-dt * 2.6);
+  const kz = reduceMotion ? 1 : 1 - Math.exp(-dt * (introT < 4 ? 1.1 : 4));
+  cam.x += (fig.x - cam.x) * kc;
+  // On narrow screens the project card sits at the bottom, so lift the view to keep the wanderer visible.
+  const lift = (activeM && W < 700) ? (H * 0.24) / cam.z : 0;
+  cam.y += (fig.y - 30 + lift - cam.y) * kc;
+  cam.z += (cam.zt - cam.z) * kz;
+  const z = cam.z;
+  OX = Math.round(cam.x * z / CELL); OY = Math.round(cam.y * z / CELL);
+  const hc = Math.floor(cols / 2), hr = Math.floor(rows / 2);
+  const cw = CELL / z; // world size of one cell
+
+  /* Visible world bounds */
+  const vx0 = (OX - hc - 1) * cw, vx1 = (OX - hc + cols + 1) * cw;
+  const vy0 = (OY - hr - 1) * cw, vy1 = (OY - hr + rows + 1) * cw;
+  canopyList.length = 0; shadowList.length = 0; markerList.length = 0;
+  for (let gy = Math.floor((vy0 - 650) / TSY); gy <= Math.ceil((vy1 + 480) / TSY); gy++) {
+    for (let gx = Math.floor((vx0 - 650) / TSX); gx <= Math.ceil((vx1 + 120) / TSX); gx++) {
+      const t = treeAt(gx, gy); if (!t) continue;
+      if (t.cx1 > vx0 && t.cx0 < vx1 && t.cy1 > vy0 && t.cy0 < vy1) canopyList.push(t);
+      if (t.sx1 > vx0 && t.sx0 < vx1 && t.sy1 > vy0 && t.sy0 < vy1) shadowList.push(t);
+    }
+  }
+  for (const m of MARKERS) if (m.x > vx0 - 60 && m.x < vx1 + 60 && m.y > vy0 - 60 && m.y < vy1 + 60) markerList.push(m);
+
+  /* Proximity → project panel */
+  let near = null, nd = 1e9;
+  for (const m of MARKERS) { const d = Math.hypot(fig.x - m.x, fig.y - m.y); if (d < 120 && d < nd) { nd = d; near = m; } }
+  showProject(near);
+  for (const m of MARKERS) m.glow += ((m === near ? 1 : 0) - m.glow) * Math.min(1, dt * 4);
+
+  const lantX = fig.x + 20 * FS * fig.facing, lantY = fig.y - 6;
+  const wind = reduceMotion ? 0 : 1;
+  const bladeLen = CELL * 1.25 * Math.min(1.9, Math.max(0.75, z));
+  const tw = T * 1.25;
+
+  for (let b = 0; b < NB; b++) { grassB[b].length = 0; treeB[b].length = 0; }
+  glyphs.length = 0;
+
+  const tgx = fig.tx !== null ? Math.round(fig.tx / cw - 0.5) : 1e9, tgy = fig.tx !== null ? Math.round(fig.ty / cw - 0.5) : 1e9;
+  const nCan = canopyList.length, nSh = shadowList.length, nMk = markerList.length;
+
+  for (let j = 0; j < rows; j++) {
+    const gy = OY + j - hr;
+    const wy = (gy + 0.5) * cw;
+    const sy = H / 2 + (j - hr + 0.5) * CELL;
+    const vy = sy / H - 0.5;
+    for (let i = 0; i < cols; i++) {
+      const gx = OX + i - hc;
+      const wx = (gx + 0.5) * cw;
+      const sx = W / 2 + (i - hc + 0.5) * CELL;
+      const r0 = h2(gx, gy, 1);
+
+      /* Topmost tree canopy / trunk at this cell */
+      let best = null, bestTrunk = false, bnx = 0, bu = 0;
+      for (let k = 0; k < nCan; k++) {
+        const t = canopyList[k];
+        if (wx < t.cx0 || wx > t.cx1 || wy < t.cy0 || wy > t.cy1) continue;
+        if (best && t.y <= best.y) continue;
+        const dy = t.y - wy, dx = wx - t.x;
+        if (dy < t.trunk) {
+          if (dy >= 0 && Math.abs(dx) < t.w * 0.13 + 2) { best = t; bestTrunk = true; }
+        } else {
+          const u = (dy - t.trunk) / (t.h - t.trunk);
+          const hw = t.w * prof(u) * (0.8 + 0.4 * vnoise(wx * 0.05, wy * 0.035, t.seed));
+          if (dx > -hw && dx < hw) { best = t; bestTrunk = false; bnx = dx / hw; bu = u; }
+        }
+      }
+
+      /* Figure (occluded by trees standing in front of it) */
+      if ((!best || best.y < fig.y) && figSample(wx, wy)) {
+        const lv = Math.max(0, Math.min(LEVELS - 1, Math.round(FB * (LEVELS - 1))));
+        if (FK === 1) glyphs.push(sx, sy, CHAR_IX["@"], 4 * LEVELS + lv);
+        else glyphs.push(sx, sy, RAMP_IX[Math.max(1, Math.min(9, Math.round(FB * 9)))], 2 * LEVELS + lv);
+        continue;
+      }
+
+      /* Lighting */
+      const vx = sx / W - 0.5;
+      let light = 0.62 + 0.55 * (vnoise(wx * 0.0024 + T * 0.01, wy * 0.0024, 3) - 0.5) + 0.28 * (vnoise(wx * 0.0011 - T * 0.006, wy * 0.0011, 9) - 0.5);
+      light *= 1 - 0.95 * (vx * vx + vy * vy) - 0.35 * Math.max(0, -vx - vy);
+      const lxd = wx - lantX, lyd = wy - lantY;
+      const lantern = 0.6 * Math.exp(-(lxd * lxd + lyd * lyd) / (140 * 140)) * flicker;
+
+      if (best) {
+        if (bestTrunk) { glyphs.push(sx, sy, CHAR_IX[r0 < 0.5 ? ":" : "|"], 3 * LEVELS + 3); continue; }
+        const edge = Math.abs(bnx);
+        if (edge > 0.86 || r0 < 0.05 + 0.2 * Math.max(0, bnx)) continue; // dark rim keeps the silhouette crisp
+        const L = (0.8 - 0.42 * bnx + 0.1 * bu + 0.24 * (h2(gx, gy, 2) - 0.5)) * (0.72 + 0.4 * Math.max(0, light)) + lantern * 0.4;
+        const bi = Math.min(NB - 1, Math.max(0, L * NB | 0));
+        const sw = wind * 0.25 * Math.sin(tw + wx * 0.006 + wy * 0.002) * bu;
+        const ang = -Math.PI / 2 + (h2(gx, gy, 3) - 0.5) * 0.6 + bnx * 0.35 + sw;
+        const len = bladeLen * (0.55 + 0.5 * h2(gx, gy, 4));
+        const c = Math.cos(ang) * len * 0.5, s = Math.sin(ang) * len * 0.5;
+        treeB[bi].push(sx - c, sy - s, sx + c, sy + s);
+        continue;
+      }
+
+      /* Waypoint marker */
+      if (gx === tgx && gy === tgy) { glyphs.push(sx, sy, CHAR_IX["×"], 4 * LEVELS + 7); continue; }
+
+      /* Project lights */
+      let mk = false;
+      for (let k = 0; k < nMk; k++) {
+        const m = markerList[k];
+        const dx = wx - m.x, dy = wy - m.y, d = Math.sqrt(dx * dx + dy * dy);
+        const R = 30 + 4 * m.glow;
+        if (d < Math.max(7, cw * 0.6)) { glyphs.push(sx, sy, CHAR_IX["+"], 4 * LEVELS + 11); mk = true; break; }
+        if (Math.abs(d - R) < Math.max(5.5, cw * 0.62)) {
+          const a = Math.atan2(dy, dx);
+          const b = 0.45 + 0.35 * Math.sin(a * 3 - T * 1.8) + 0.2 * m.glow;
+          glyphs.push(sx, sy, CHAR_IX[b > 0.6 ? "*" : "·"], 4 * LEVELS + Math.max(2, Math.min(11, b * 11 | 0)));
+          mk = true; break;
+        }
+        light += 0.5 * Math.exp(-(d * d) / (90 * 90)) * (0.7 + 0.3 * m.glow);
+      }
+      if (mk) continue;
+
+      /* Shadows */
+      let sh = 0;
+      for (let k = 0; k < nSh; k++) {
+        const t = shadowList[k];
+        if (wx < t.sx0 || wx > t.sx1 || wy < t.sy0 || wy > t.sy1) continue;
+        const px = wx - t.x, py = wy - t.y;
+        const u = (px * SUN_X + py * SUN_Y) / t.L;
+        if (u <= 0 || u >= 1) continue;
+        const v = Math.abs(-px * SUN_Y + py * SUN_X);
+        const hw = t.w * 1.05 * prof(u) + 4;
+        const kk = clamp01((hw - v) / 16 + 0.5);
+        if (kk > sh) { sh = kk; if (sh >= 1) break; }
+      }
+      { // the wanderer's own shadow
+        const px = wx - fig.x, py = wy - fig.y;
+        const u = (px * SUN_X + py * SUN_Y) / (95 * FS);
+        if (u > 0 && u < 1) {
+          const v = Math.abs(-px * SUN_Y + py * SUN_X);
+          if (v < 15 * FS * prof(u) + 2) sh = Math.max(sh, 0.85);
+        }
+      }
+
+      const lit = Math.max(0, light * (1 - 0.74 * sh)) + lantern;
+      const pf = pathField(wx, wy);
+
+      if (pf > h2(gx, gy, 5) * 0.9 + 0.05) {
+        if (r0 < 0.16) continue;
+        const b = (0.32 + 0.28 * h2(gx, gy, 6)) * lit;
+        const lv = Math.min(LEVELS - 1, b * LEVELS | 0);
+        if (lv < 1) continue;
+        glyphs.push(sx, sy, PATH_IX[(gx * 7 + gy * 3 & 0x7fffffff) % PATH_IX.length], lv);
+        continue;
+      }
+
+      if (sh > 0.55 && h2(gx, gy, 7) < 0.58) {
+        const idx = ((gy * 61 + gx) % SHADOW_IX.length + SHADOW_IX.length) % SHADOW_IX.length;
+        const b = (0.3 + 0.25 * h2(gx, gy, 8)) * (light + lantern * 1.4);
+        const lv = Math.min(LEVELS - 1, b * LEVELS | 0);
+        if (lv >= 1 && SHADOW_TEXT[idx] !== " ") glyphs.push(sx, sy, SHADOW_IX[idx], 1 * LEVELS + lv);
+        continue;
+      }
+
+      if (r0 < 0.1) continue;
+      const L = (0.16 + 0.56 * h2(gx, gy, 9)) * lit;
+      if (L < 0.05) continue;
+      const bi = Math.min(NB - 1, L * NB | 0);
+      const sw = wind * (0.32 * Math.sin(tw + wx * 0.008 + wy * 0.0035) + 0.18 * (vnoise(wx * 0.004 + T * 0.35, wy * 0.004, 4) - 0.5));
+      const ang = -Math.PI / 2 + (h2(gx, gy, 10) - 0.5) * 1.15 + sw;
+      const len = bladeLen * (0.5 + 0.7 * h2(gx, gy, 11));
+      const c = Math.cos(ang) * len * 0.5, s = Math.sin(ang) * len * 0.5;
+      grassB[bi].push(sx - c, sy - s, sx + c, sy + s);
+    }
+  }
+
+  /* Draw */
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = "#04070a";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.lineCap = "round";
+  const lwBase = Math.max(1, 1.15 * Math.sqrt(z));
+  for (const [B, C, LW] of [[grassB, GRASS_COLS, 1], [treeB, TREE_COLS, 1.45]]) {
+    ctx.lineWidth = lwBase * LW;
+    for (let b = 0; b < NB; b++) {
+      const a = B[b]; if (!a.length) continue;
+      ctx.strokeStyle = C[b];
+      ctx.beginPath();
+      for (let k = 0; k < a.length; k += 4) { ctx.moveTo(a[k], a[k + 1]); ctx.lineTo(a[k + 2], a[k + 3]); }
+      ctx.stroke();
+    }
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const half = AC / 2;
+  for (let k = 0; k < glyphs.length; k += 4) {
+    ctx.drawImage(atlas, glyphs[k + 2] * AC, glyphs[k + 3] * AC, AC, AC,
+      Math.round(glyphs[k] * DPR - half), Math.round(glyphs[k + 1] * DPR - half), AC, AC);
+  }
+
+  /* Fireflies + lantern bloom */
+  ctx.globalCompositeOperation = "lighter";
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const vw = W / z, vh = H / z;
+  for (const f of flies) {
+    if (!reduceMotion) {
+      f.x += (vnoise(f.s, T * 0.3, 21) - 0.5) * 40 * dt;
+      f.y += (vnoise(f.s, T * 0.3, 22) - 0.5) * 40 * dt - 4 * dt;
+    }
+    if (f.x < cam.x - vw * 0.6) f.x += vw * 1.2; else if (f.x > cam.x + vw * 0.6) f.x -= vw * 1.2;
+    if (f.y < cam.y - vh * 0.6) f.y += vh * 1.2; else if (f.y > cam.y + vh * 0.6) f.y -= vh * 1.2;
+    const a = reduceMotion ? 0.5 : Math.max(0, Math.sin(T * (0.6 + (f.s % 1)) + f.s));
+    if (a < 0.05) continue;
+    const [px, py] = toScreen(f.x, f.y);
+    ctx.globalAlpha = a * 0.75;
+    const sz = 7 + 4 * a;
+    ctx.drawImage(glow, px - sz / 2, py - sz / 2, sz, sz);
+  }
+  {
+    const [px, py] = toScreen(fig.x + 20 * FS * fig.facing, fig.y - 33 * FS);
+    ctx.globalAlpha = 0.3 * flicker;
+    const sz = 70 * z;
+    ctx.drawImage(glow, px - sz / 2, py - sz / 2, sz, sz);
+  }
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = "source-over";
+
+  /* HTML labels */
+  {
+    const [px, py] = toScreen(fig.x, fig.y);
+    nametag.style.transform = `translate(${Math.round(px)}px, ${Math.round(py + 14)}px) translateX(-50%)`;
+  }
+  for (const m of MARKERS) {
+    const [px, py] = toScreen(m.x, m.y - 40);
+    const lift = Math.round(8 + 6 * z);
+    const on = px > -100 && px < W + 100 && py > -40 && py < H + 40;
+    m.el.style.visibility = on ? "visible" : "hidden";
+    if (on) m.el.style.transform = `translate(${Math.round(px)}px, ${Math.round(py) - lift}px) translate(-50%, -100%)`;
+  }
+  coordsEl.textContent = `x ${String(Math.round(fig.x / 10)).padStart(4, " ")}  y ${String(Math.round(-fig.y / 10)).padStart(4, " ")}  ·  ${z.toFixed(2)}×`;
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+if (matchMedia("(hover: none)").matches) document.getElementById("hint").textContent = "tap to walk · follow the lights";
+})();
+</script>
+<noscript>
+  <div style="position:fixed;inset:0;padding:32px;background:#05080a;color:#e8eee9;font-family:monospace">
+    This portfolio is an interactive field that needs JavaScript. Say hello at hello@example.com.
+  </div>
+</noscript>
+</body>
+</html>
