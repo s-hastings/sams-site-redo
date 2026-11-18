@@ -1,6 +1,6 @@
 # sams-site-redo
 
-A one-page portfolio set in a moonlit field rendered entirely in glyphs: teal grass strokes, cypress trees, shadows woven from your own bio text, and a path of `@Q08` characters. You walk a small lantern-carrying figure through the field; each glowing ring is a project, and reaching one opens its card. The path ends at a ruined stone tower built from dense glyphs and swaying moss. Its arched door opens the About card.
+A one-page portfolio set in a moonlit field rendered entirely in glyphs: teal grass strokes, cypress trees, shadows woven from your own bio text, and a path of `@Q08` characters. You walk a small lantern-carrying figure through the field; each glowing ring is a project, and reaching one opens its card. The path ends at a ruined stone tower built from dense glyphs and swaying moss. Its arched door opens the About card. A river and a pond ripple as you wade through them (a real wave simulation), and clicking water skips a stone.
 
 ## Run it
 
@@ -22,7 +22,7 @@ Everything you'd want to change lives in the `SITE` object near the bottom of `i
 - Arrow keys / WASD to walk, scroll or `+`/`-` to zoom
 - **work / about / contact** in the top bar open plain, accessible lists. Picking a project in **work** walks you there
 
-The renderer lowers its glyph resolution automatically on slow machines and respects `prefers-reduced-motion`.
+Rendering uses WebGL2: every grass blade and glyph is one instance, and the whole field takes two draw calls. What sits in each cell is cached and reused as the camera pans, so each frame only adds wind, ripples and light on top. Without a hardware GPU it falls back to the 2D canvas, and on slow machines it automatically switches to coarser cells. It respects `prefers-reduced-motion`.
 
 ## Deploy
 

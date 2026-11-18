@@ -36,7 +36,9 @@
   button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
   :focus-visible { outline: 1px solid var(--mint); outline-offset: 3px; }
 
-  #field { position: fixed; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; touch-action: none; }
+  #field, #fx { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  #field { cursor: crosshair; touch-action: none; }
+  #fx { pointer-events: none; }
 
   /* World-anchored labels */
   #labels { position: fixed; inset: 0; pointer-events: none; }
@@ -163,6 +165,7 @@
 </head>
 <body>
   <canvas id="field" aria-hidden="true"></canvas>
+  <canvas id="fx" aria-hidden="true"></canvas>
   <div id="labels" aria-hidden="true"></div>
 
   <header class="top">
@@ -259,7 +262,9 @@ const SITE = {
 
 /* ── Setup ─────────────────────────────────────────────────── */
 const canvas = document.getElementById("field");
-const ctx = canvas.getContext("2d", { alpha: false });
+const fxCanvas = document.getElementById("fx");
+const fx = fxCanvas.getContext("2d");
+let gpu = null, ctx = null; // WebGL2 renderer, or a 2D canvas fallback (set up below)
 const labelsEl = document.getElementById("labels");
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -412,6 +417,7 @@ function treeAt(gx, gy) {
     pathField(x, y);
     let ok = pathDist > w * 0.8 + 6;
     if (ok && Math.hypot(x - SPAWN.x, y - SPAWN.y) < 170) ok = false;
+    if (ok && waterField(x, y) > -w * 0.6 - 12) ok = false;
     if (ok && x > TOWER.x0 - w - 20 && x < TOWER.x1 + w + 20 && y > TOWER.top - 30 && y < TOWER.y + 90) ok = false;
     for (const m of MARKERS) if (ok && Math.hypot(x - m.x, y - m.y) < 190) ok = false;
     if (ok) {
@@ -424,6 +430,81 @@ function treeAt(gx, gy) {
   treeCache.set(key, t);
   return t;
 }
+/* ── Water: a river and a pond, plus a ripple simulation ──── */
+const RIVER = { ang: 1.05, a1: 120, f1: 1 / 700, a2: 40, f2: 1 / 260, w: 96, off: 0 };
+const RC = Math.cos(RIVER.ang), RS = Math.sin(RIVER.ang);
+{
+  const A = pathPoint(0, 880, 0);
+  const u = A.x * RC + A.y * RS, v = -A.x * RS + A.y * RC;
+  RIVER.off = v - (RIVER.a1 * Math.sin(u * RIVER.f1) + RIVER.a2 * Math.sin(u * RIVER.f2 + 0.4));
+}
+const POND = { x: SPAWN.x + 150, y: SPAWN.y + 330, r: 175 };
+/* > 0 inside water (≈ distance to the shore), < 0 on land */
+function waterField(x, y) {
+  const u = x * RC + y * RS, v = -x * RS + y * RC - RIVER.off;
+  const cen = RIVER.a1 * Math.sin(u * RIVER.f1) + RIVER.a2 * Math.sin(u * RIVER.f2 + 0.4);
+  const rv = RIVER.w * (0.8 + 0.4 * vnoise(u * 0.008, 3.1, 70)) - Math.abs(v - cen);
+  const dx = x - POND.x, dy = y - POND.y;
+  const pv = POND.r * (0.72 + 0.56 * vnoise(x * 0.007, y * 0.007, 71)) - Math.sqrt(dx * dx + dy * dy);
+  return rv > pv ? rv : pv;
+}
+
+const SIMC = 5, SW = 270, SH = 170;           // ripple grid: 5 world units per cell
+let simA = new Float32Array(SW * SH), simB = new Float32Array(SW * SH);
+let simMask = new Uint8Array(SW * SH);
+let simX0 = 1e9, simY0 = 1e9, simLive = 0, simHasWater = false, simAcc = 0;
+function simRecentre(cx, cy) {
+  const nx0 = Math.round(cx / SIMC - SW / 2) * SIMC, ny0 = Math.round(cy / SIMC - SH / 2) * SIMC;
+  const dx = Math.round((nx0 - simX0) / SIMC), dy = Math.round((ny0 - simY0) / SIMC);
+  const na = new Float32Array(SW * SH), nb = new Float32Array(SW * SH);
+  if (simLive > 0 && Math.abs(dx) < SW && Math.abs(dy) < SH) {
+    for (let j = 0; j < SH; j++) {
+      const jo = j + dy; if (jo < 0 || jo >= SH) continue;
+      for (let i = 0; i < SW; i++) {
+        const io = i + dx; if (io < 0 || io >= SW) continue;
+        na[j * SW + i] = simA[jo * SW + io]; nb[j * SW + i] = simB[jo * SW + io];
+      }
+    }
+  }
+  simA = na; simB = nb; simX0 = nx0; simY0 = ny0;
+  simHasWater = false;
+  for (let j = 0; j < SH; j++) {
+    const y = simY0 + (j + 0.5) * SIMC;
+    for (let i = 0; i < SW; i++) {
+      const x = simX0 + (i + 0.5) * SIMC;
+      const m = waterField(x, y) > 0 && pathField(x, y) < 0.55 ? 1 : 0;
+      simMask[j * SW + i] = m;
+      if (m) simHasWater = true;
+    }
+  }
+}
+function disturb(x, y, amt, rad) {
+  const ci = Math.floor((x - simX0) / SIMC), cj = Math.floor((y - simY0) / SIMC);
+  for (let j = cj - rad; j <= cj + rad; j++) {
+    if (j < 1 || j >= SH - 1) continue;
+    for (let i = ci - rad; i <= ci + rad; i++) {
+      if (i < 1 || i >= SW - 1) continue;
+      const d = Math.hypot(i - ci, j - cj);
+      if (d > rad) continue;
+      const k = j * SW + i;
+      if (simMask[k]) simA[k] += amt * (1 - d / (rad + 1));
+    }
+  }
+  simLive = 8;
+}
+function simStep() {
+  const a = simA, b = simB;
+  for (let j = 1; j < SH - 1; j++) {
+    let k = j * SW + 1;
+    for (let i = 1; i < SW - 1; i++, k++) {
+      if (!simMask[k]) { b[k] = 0; continue; }
+      // damped wave equation; C² = 0.3 keeps the rings slow and readable
+      b[k] = (2 * a[k] - b[k] + 0.3 * (a[k - 1] + a[k + 1] + a[k - SW] + a[k + SW] - 4 * a[k])) * 0.975;
+    }
+  }
+  simA = b; simB = a;
+}
+
 /* Cypress silhouette half-width profile along its height, u in [0,1] */
 function prof(u) {
   if (u <= 0 || u >= 1) return 0;
@@ -432,7 +513,7 @@ function prof(u) {
 }
 
 /* ── The wanderer ─────────────────────────────────────────── */
-const fig = { x: SPAWN.x, y: SPAWN.y, tx: null, ty: null, facing: 1, phase: 0, moving: false };
+const fig = { x: SPAWN.x, y: SPAWN.y, tx: null, ty: null, facing: 1, phase: 0, moving: false, inWater: false, splashT: 0 };
 const FS = 1.25; // figure scale
 let FB = 0, FK = 0; // side outputs: brightness, kind (0 body, 1 lantern)
 let flicker = 1;
@@ -441,6 +522,7 @@ function figSample(wx, wy) {
   if (ly > 2 || ly < -92 || lx < -26 || lx > 30) return false;
   const bob = fig.moving ? Math.abs(Math.sin(fig.phase)) * 2.2 : 0;
   const yy = ly + bob;
+  if (fig.inWater && yy > -20) return false; // wading: legs are under the surface
   const ldx = lx - 20, ldy = yy + 33;
   if (ldx * ldx + ldy * ldy < 34) { FK = 1; FB = 0.8 + 0.2 * flicker; return true; }
   const hx = lx - 1, hy = yy + 80;
@@ -469,15 +551,21 @@ function figSample(wx, wy) {
 /* ── Glyph atlas ──────────────────────────────────────────── */
 const RAMP = " .:-=+*#%@";
 const PATH_CHARS = "@Q08o@Qo8Q@";
+const WATER_CHARS = " .,-~=≈";
+const FOAM_CHARS = "°o*~:";
+const LILY_CHARS = "θø";
 const STONE_CHARS = "$Q0&8%dbqpWM#@BNwmzxk(/\\|";
 const SHADOW_TEXT = (SITE.about.join(" ") + " " + SITE.projects.map(p => p.title + " " + p.desc).join(" ") + " ")
   .toLowerCase().replace(/[^\x21-\x7e ]/g, "").replace(/\s+/g, " ").replace(/ /g, () => "  ;:^|!*".charAt(Math.random() * 8 | 0));
-const CHARS = Array.from(new Set((RAMP + PATH_CHARS + STONE_CHARS + SHADOW_TEXT + ":|*+·×").split(""))).join("");
+const CHARS = Array.from(new Set((RAMP + PATH_CHARS + WATER_CHARS + FOAM_CHARS + LILY_CHARS + STONE_CHARS + SHADOW_TEXT + ":|*+·×").split(""))).join("");
 const CHAR_IX = {}; for (let i = 0; i < CHARS.length; i++) CHAR_IX[CHARS[i]] = i;
 const SHADOW_IX = Array.from(SHADOW_TEXT, c => CHAR_IX[c]);
 const PATH_IX = Array.from(PATH_CHARS, c => CHAR_IX[c]);
 const RAMP_IX = Array.from(RAMP, c => CHAR_IX[c]);
 const STONE_IX = Array.from(STONE_CHARS, c => CHAR_IX[c]);
+const WATER_IX = Array.from(WATER_CHARS, c => CHAR_IX[c]);
+const FOAM_IX = Array.from(FOAM_CHARS, c => CHAR_IX[c]);
+const LILY_IX = Array.from(LILY_CHARS, c => CHAR_IX[c]);
 
 const PALS = [
   [198, 192, 216], // 0 path — pale lavender
@@ -485,7 +573,10 @@ const PALS = [
   [238, 238, 233], // 2 figure — moon white
   [150, 152, 162], // 3 trunk
   [255, 204, 126], // 4 warm lantern / lights
-  [214, 222, 246]  // 5 tower stone — cold moonlit white
+  [214, 222, 246], // 5 tower stone — cold moonlit white
+  [120, 156, 232], // 6 water — deep moonlit blue
+  [226, 238, 255], // 7 foam
+  [204, 214, 88]   // 8 lily pads
 ];
 const LEVELS = 12;
 let atlas, AC = 0; // atlas canvas, atlas cell size (device px)
@@ -506,6 +597,7 @@ function buildAtlas() {
       for (let c = 0; c < CHARS.length; c++) a.fillText(CHARS[c], c * AC + AC / 2, row + AC / 2 + DPR * 0.5);
     }
   }
+  atlasVersion++;
 }
 
 /* Stroke colour buckets */
@@ -513,16 +605,16 @@ const NB = 20;
 function ramp(dark, bright, gamma) {
   return Array.from({ length: NB }, (_, i) => {
     const k = Math.pow(i / (NB - 1), gamma);
-    return `rgb(${dark.map((d, j) => Math.round(d + (bright[j] - d) * k)).join(",")})`;
+    return dark.map((d, j) => Math.round(d + (bright[j] - d) * k));
   });
 }
 const GRASS_COLS = ramp([8, 28, 30], [120, 226, 192], 1.25);
 const TREE_COLS = ramp([10, 40, 32], [104, 206, 150], 0.95);
 const MOSS_COLS = ramp([12, 30, 14], [178, 214, 104], 1.5);
-const grassB = Array.from({ length: NB }, () => []);
-const mossB = Array.from({ length: NB }, () => []);
-const treeB = Array.from({ length: NB }, () => []);
-const glyphs = [];
+const STROKE_RGB = [...GRASS_COLS, ...TREE_COLS, ...MOSS_COLS];          // colour index = set * NB + level
+const STROKE_CSS = STROKE_RGB.map(c => `rgb(${c.join(",")})`);
+let atlasVersion = 0;
+
 
 /* Firefly sprite */
 const glow = document.createElement("canvas");
@@ -544,9 +636,11 @@ function resize() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
   W = window.innerWidth; H = window.innerHeight;
   CELL = (W < 700 ? 5 : 6) + CELL_BUMP;
-  canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+  canvas.width = fxCanvas.width = Math.round(W * DPR); canvas.height = fxCanvas.height = Math.round(H * DPR);
   cols = Math.ceil(W / CELL) + 2; rows = Math.ceil(H / CELL) + 2;
   buildAtlas();
+  screenTables();
+  SD = new Float32Array(cols * rows * 5); GD = new Float32Array((cols * rows + 64) * 4);
 }
 window.addEventListener("resize", resize);
 resize();
@@ -555,8 +649,9 @@ if (document.fonts && document.fonts.load) {
 }
 
 let OX = 0, OY = 0; // snapped camera, in cells
-const toScreen = (wx, wy) => [W / 2 + wx * cam.z - OX * CELL, H / 2 + wy * cam.z - OY * CELL];
-const toWorld = (sx, sy) => [(sx - W / 2 + OX * CELL) / cam.z, (sy - H / 2 + OY * CELL) / cam.z];
+let ZQ = cam.z; // zoom quantised to small steps so the static cell cache can be reused
+const toScreen = (wx, wy) => [W / 2 + wx * ZQ - OX * CELL, H / 2 + wy * ZQ - OY * CELL];
+const toWorld = (sx, sy) => [(sx - W / 2 + OX * CELL) / ZQ, (sy - H / 2 + OY * CELL) / ZQ];
 
 /* ── Labels ───────────────────────────────────────────────── */
 const nametag = document.createElement("div");
@@ -590,6 +685,7 @@ canvas.addEventListener("click", e => {
   const [wx, wy] = toWorld(e.clientX, e.clientY);
   for (const m of MARKERS) if (Math.hypot(wx - m.x, wy - m.y) < 50) return walkTo(m.x - 64, m.y + 18);
   if (wx > TOWER.x0 && wx < TOWER.x1 && wy > TOWER.top && wy < TOWER.y) return walkTo(ABOUT_SPOT.x, ABOUT_SPOT.y);
+  if (waterField(wx, wy) > 0) disturb(wx, wy, 2.6, 4);
   walkTo(wx, wy);
 });
 canvas.addEventListener("wheel", e => {
@@ -681,10 +777,354 @@ function showProject(m) {
   panel.classList.add("open");
 }
 
-/* ── Render ───────────────────────────────────────────────── */
+/* ── GPU renderer ─────────────────────────────────────────────
+   Every grass blade and glyph is one instance; the whole field is two
+   instanced draw calls. Falls back to the 2D canvas if WebGL2 is missing. */
+var SD, GD, sN = 0, gN = 0; // allocated in resize()
+function S(x0, y0, x1, y1, ci) { SD[sN++] = x0; SD[sN++] = y0; SD[sN++] = x1; SD[sN++] = y1; SD[sN++] = ci; }
+function G(x, y, g, r) { GD[gN++] = x; GD[gN++] = y; GD[gN++] = g; GD[gN++] = r; }
+
+function createGPU(cv) {
+  // A software-emulated GPU is slower than the 2D canvas, so probe on a throwaway canvas first.
+  const probe = document.createElement("canvas").getContext("webgl2");
+  if (!probe) return null;
+  const info = probe.getExtension("WEBGL_debug_renderer_info");
+  const renderer = info ? String(probe.getParameter(info.UNMASKED_RENDERER_WEBGL)) : "";
+  const lose = probe.getExtension("WEBGL_lose_context"); if (lose) lose.loseContext();
+  if (/swiftshader|llvmpipe|software|basic render/i.test(renderer) && !/[?&]gpu=force/.test(location.search)) return null;
+  const gl = cv.getContext("webgl2", { alpha: false, antialias: false, premultipliedAlpha: true });
+  if (!gl) return null;
+  const compile = (type, src) => {
+    const sh = gl.createShader(type); gl.shaderSource(sh, src); gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh));
+    return sh;
+  };
+  const program = (vs, fs) => {
+    const p = gl.createProgram();
+    gl.attachShader(p, compile(gl.VERTEX_SHADER, vs)); gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    return p;
+  };
+  const NC = STROKE_RGB.length;
+  const strokeP = program(`#version 300 es
+layout(location=0) in vec2 corner;
+layout(location=1) in vec4 seg;
+layout(location=2) in float ci;
+uniform vec2 uDev; uniform float uDpr; uniform vec3 uCols[${NC}]; uniform vec3 uW;
+out vec3 vCol; out float vD; out float vHW;
+void main() {
+  int i = int(ci + 0.5);
+  int set = i / ${NB};
+  float w = set == 0 ? uW.x : (set == 1 ? uW.y : uW.z);
+  vec2 p0 = seg.xy * uDpr, p1 = seg.zw * uDpr;
+  vec2 d = p1 - p0; float l = max(length(d), 0.001);
+  vec2 t = d / l, n = vec2(-t.y, t.x);
+  float hw = w * 0.5 * uDpr, ext = hw + 1.0;
+  vec2 p = mix(p0, p1, corner.x) + t * (corner.x * 2.0 - 1.0) * hw + n * corner.y * ext;
+  vCol = uCols[i]; vD = corner.y * ext; vHW = hw;
+  vec2 c = p / uDev * 2.0 - 1.0;
+  gl_Position = vec4(c.x, -c.y, 0.0, 1.0);
+}`, `#version 300 es
+precision mediump float;
+in vec3 vCol; in float vD; in float vHW; out vec4 o;
+void main() { float a = clamp(vHW + 0.5 - abs(vD), 0.0, 1.0); o = vec4(vCol * a, a); }`);
+  const glyphP = program(`#version 300 es
+layout(location=0) in vec2 corner;
+layout(location=1) in vec4 g;
+uniform vec2 uDev; uniform float uDpr; uniform float uAC; uniform vec2 uAtlas;
+out vec2 vUV;
+void main() {
+  vec2 tl = floor(g.xy * uDpr - uAC * 0.5 + 0.5);
+  vUV = (g.zw + corner) * uAC / uAtlas;
+  vec2 c = (tl + corner * uAC) / uDev * 2.0 - 1.0;
+  gl_Position = vec4(c.x, -c.y, 0.0, 1.0);
+}`, `#version 300 es
+precision mediump float;
+uniform sampler2D uTex; in vec2 vUV; out vec4 o;
+void main() { o = texture(uTex, vUV); }`);
+
+  const buf = data => { const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW); return b; };
+  const cornerS = buf(new Float32Array([0, -1, 1, -1, 0, 1, 1, 1]));
+  const cornerG = buf(new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]));
+  const sBuf = gl.createBuffer(), gBuf = gl.createBuffer();
+
+  const vaoS = gl.createVertexArray();
+  gl.bindVertexArray(vaoS);
+  gl.bindBuffer(gl.ARRAY_BUFFER, cornerS); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, sBuf);
+  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 20, 0); gl.vertexAttribDivisor(1, 1);
+  gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 20, 16); gl.vertexAttribDivisor(2, 1);
+  const vaoG = gl.createVertexArray();
+  gl.bindVertexArray(vaoG);
+  gl.bindBuffer(gl.ARRAY_BUFFER, cornerG); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, gBuf);
+  gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 16, 0); gl.vertexAttribDivisor(1, 1);
+  gl.bindVertexArray(null);
+
+  const U = (p, n) => gl.getUniformLocation(p, n);
+  const su = { dev: U(strokeP, "uDev"), dpr: U(strokeP, "uDpr"), cols: U(strokeP, "uCols"), w: U(strokeP, "uW") };
+  const gu = { dev: U(glyphP, "uDev"), dpr: U(glyphP, "uDpr"), ac: U(glyphP, "uAC"), atlas: U(glyphP, "uAtlas"), tex: U(glyphP, "uTex") };
+  gl.useProgram(strokeP);
+  gl.uniform3fv(su.cols, new Float32Array(STROKE_RGB.flat().map(v => v / 255)));
+
+  const tex = gl.createTexture();
+  let texVersion = -1;
+  return {
+    draw(widths) {
+      if (texVersion !== atlasVersion) {
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, atlas);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        texVersion = atlasVersion;
+      }
+      gl.viewport(0, 0, cv.width, cv.height);
+      gl.clearColor(4 / 255, 7 / 255, 10 / 255, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+
+      gl.useProgram(strokeP);
+      gl.uniform2f(su.dev, cv.width, cv.height); gl.uniform1f(su.dpr, DPR); gl.uniform3f(su.w, widths[0], widths[1], widths[2]);
+      gl.bindBuffer(gl.ARRAY_BUFFER, sBuf); gl.bufferData(gl.ARRAY_BUFFER, SD.subarray(0, sN), gl.STREAM_DRAW);
+      gl.bindVertexArray(vaoS); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, sN / 5);
+
+      gl.useProgram(glyphP);
+      gl.uniform2f(gu.dev, cv.width, cv.height); gl.uniform1f(gu.dpr, DPR); gl.uniform1f(gu.ac, AC);
+      gl.uniform2f(gu.atlas, atlas.width, atlas.height);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex); gl.uniform1i(gu.tex, 0);
+      gl.bindBuffer(gl.ARRAY_BUFFER, gBuf); gl.bufferData(gl.ARRAY_BUFFER, GD.subarray(0, gN), gl.STREAM_DRAW);
+      gl.bindVertexArray(vaoG); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, gN / 4);
+      gl.bindVertexArray(null);
+    }
+  };
+}
+try { gpu = createGPU(canvas); } catch (e) { gpu = null; console.warn("WebGL renderer unavailable, using 2D canvas", e); }
+if (!gpu) ctx = canvas.getContext("2d", { alpha: false });
+
+const strokeBuckets = Array.from({ length: STROKE_RGB.length }, () => []);
+function draw2d(widths) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = "#04070a";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.lineCap = "round";
+  for (const b of strokeBuckets) b.length = 0;
+  for (let k = 0; k < sN; k += 5) strokeBuckets[SD[k + 4]].push(k);
+  for (let ci = 0; ci < strokeBuckets.length; ci++) {
+    const b = strokeBuckets[ci]; if (!b.length) continue;
+    ctx.lineWidth = widths[(ci / NB) | 0];
+    ctx.strokeStyle = STROKE_CSS[ci];
+    ctx.beginPath();
+    for (const k of b) { ctx.moveTo(SD[k], SD[k + 1]); ctx.lineTo(SD[k + 2], SD[k + 3]); }
+    ctx.stroke();
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const half = AC / 2;
+  for (let k = 0; k < gN; k += 4) {
+    ctx.drawImage(atlas, GD[k + 2] * AC, GD[k + 3] * AC, AC, AC,
+      Math.round(GD[k] * DPR - half), Math.round(GD[k + 1] * DPR - half), AC, AC);
+  }
+}
+
+/* ── Static cell cache ────────────────────────────────────────
+   What sits in each world cell (grass, tree, stone, path, water…), its
+   base colour, angle and glyph never change, so they're computed once and
+   reused while the camera pans. Each frame only adds wind, ripples,
+   the lantern and the pulsing lights on top. */
 const coordsEl = document.getElementById("coords");
-const canopyList = [], shadowList = [], markerList = [];
-let last = performance.now(), T = 0, introT = 0;
+const NONE = 0xffff;
+const K_GRASS = 1, K_TREE = 2, K_MOSS = 3, K_GLYPH = 4, K_WATER = 5, K_MARK = 6;
+const FIELDS = ["kind", "pal", "gl", "occ", "sb", "lk", "ang", "amp", "ph", "len"];
+function makeFields(n) {
+  return { kind: new Uint8Array(n), pal: new Uint8Array(n), gl: new Uint16Array(n), occ: new Float32Array(n),
+           sb: new Float32Array(n), lk: new Float32Array(n), ang: new Float32Array(n), amp: new Float32Array(n),
+           ph: new Float32Array(n), len: new Float32Array(n) };
+}
+var F = null, Fb = null, cacheGX = 0, cacheGY = 0, cacheZ = -1, cacheN = 0;
+const canopyList = [], shadowList = [];
+let towerVis = false;
+
+/* Per-screen-cell tables: centre positions and vignette */
+var SXA = null, SYA = null, VIG = null;
+function screenTables() {
+  const hc = Math.floor(cols / 2), hr = Math.floor(rows / 2);
+  SXA = new Float32Array(cols); SYA = new Float32Array(rows); VIG = new Float32Array(cols * rows);
+  for (let i = 0; i < cols; i++) SXA[i] = W / 2 + (i - hc + 0.5) * CELL;
+  for (let j = 0; j < rows; j++) SYA[j] = H / 2 + (j - hr + 0.5) * CELL;
+  for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+    const vx = SXA[i] / W - 0.5, vy = SYA[j] / H - 0.5;
+    VIG[j * cols + i] = Math.max(0, 1 - 0.95 * (vx * vx + vy * vy) - 0.35 * Math.max(0, -vx - vy));
+  }
+  cacheZ = -1;
+}
+screenTables();
+
+const SIN = new Float32Array(4096);
+for (let i = 0; i < 4096; i++) SIN[i] = Math.sin(i / 4096 * TAU);
+const SK = 4096 / TAU;
+const LANT = new Float32Array(257); // lantern falloff by squared distance
+for (let i = 0; i <= 256; i++) LANT[i] = Math.exp(-(i / 256) * 6.76);
+const LANT_R = 140 * 2.6;
+
+function gatherTrees(vx0, vx1, vy0, vy1) {
+  canopyList.length = 0; shadowList.length = 0;
+  for (let gy = Math.floor((vy0 - 650) / TSY); gy <= Math.ceil((vy1 + 480) / TSY); gy++) {
+    for (let gx = Math.floor((vx0 - 650) / TSX); gx <= Math.ceil((vx1 + 120) / TSX); gx++) {
+      const t = treeAt(gx, gy); if (!t) continue;
+      if (t.cx1 > vx0 && t.cx0 < vx1 && t.cy1 > vy0 && t.cy0 < vy1) canopyList.push(t);
+      if (t.sx1 > vx0 && t.sx0 < vx1 && t.sy1 > vy0 && t.sy0 < vy1) shadowList.push(t);
+    }
+  }
+  towerVis = TOWER.sx1 > vx0 && TOWER.x0 < vx1 && TOWER.sy1 > vy0 && TOWER.top < vy1;
+}
+
+function computeCell(f, c, gx, gy, cw) {
+  const wx = (gx + 0.5) * cw, wy = (gy + 0.5) * cw;
+  f.kind[c] = 0; f.occ[c] = -1e9; f.gl[c] = NONE;
+  const r0 = h2(gx, gy, 1);
+
+  /* Topmost tree canopy / trunk */
+  let best = null, bestTrunk = false, bnx = 0, bu = 0;
+  for (let k = 0; k < canopyList.length; k++) {
+    const t = canopyList[k];
+    if (wx < t.cx0 || wx > t.cx1 || wy < t.cy0 || wy > t.cy1) continue;
+    if (best && t.y <= best.y) continue;
+    const dy = t.y - wy, dx = wx - t.x;
+    if (dy < t.trunk) {
+      if (dy >= 0 && Math.abs(dx) < t.w * 0.13 + 2) { best = t; bestTrunk = true; }
+    } else {
+      const u = (dy - t.trunk) / (t.h - t.trunk);
+      const hw = t.w * prof(u) * (0.8 + 0.4 * vnoise(wx * 0.05, wy * 0.035, t.seed));
+      if (dx > -hw && dx < hw) { best = t; bestTrunk = false; bnx = dx / hw; bu = u; }
+    }
+  }
+  let tk = towerVis ? towerSample(wx, wy, gx, gy) : 0;
+  if (tk && best) { if (best.y > TOWER.y) tk = 0; else best = null; }
+  if (tk) f.occ[c] = TOWER.y; else if (best) f.occ[c] = best.y;
+
+  let light = 0.62 + 0.55 * (vnoise(wx * 0.0024, wy * 0.0024, 3) - 0.5) + 0.28 * (vnoise(wx * 0.0011, wy * 0.0011, 9) - 0.5);
+
+  if (tk) {
+    if (tk === 3) return;
+    if (tk === 2) {
+      f.kind[c] = K_MOSS; f.sb[c] = TB * (0.6 + 0.5 * Math.max(0, light)); f.lk[c] = 0.5;
+      f.ang[c] = Math.PI / 2 + (h2(gx, gy, 55) - 0.5) * 1.3; f.amp[c] = 0.55;
+      f.ph[c] = wx * 0.02 + wy * 0.012; f.len[c] = 0.35 + 0.5 * h2(gx, gy, 56);
+      return;
+    }
+    f.kind[c] = K_GLYPH; f.gl[c] = TCH; f.pal[c] = 5; f.sb[c] = TB * (0.78 + 0.5 * Math.max(0, light)); f.lk[c] = 0.7;
+    return;
+  }
+  if (best) {
+    if (bestTrunk) { f.kind[c] = K_GLYPH; f.gl[c] = CHAR_IX[r0 < 0.5 ? ":" : "|"]; f.pal[c] = 3; f.sb[c] = 0.3; f.lk[c] = 0; return; }
+    if (Math.abs(bnx) > 0.86 || r0 < 0.05 + 0.2 * Math.max(0, bnx)) return; // dark rim keeps the silhouette crisp
+    f.kind[c] = K_TREE;
+    f.sb[c] = (0.8 - 0.42 * bnx + 0.1 * bu + 0.24 * (h2(gx, gy, 2) - 0.5)) * (0.72 + 0.4 * Math.max(0, light)); f.lk[c] = 0.4;
+    f.ang[c] = -Math.PI / 2 + (h2(gx, gy, 3) - 0.5) * 0.6 + bnx * 0.35; f.amp[c] = 0.25 * bu;
+    f.ph[c] = wx * 0.006 + wy * 0.002; f.len[c] = 0.55 + 0.5 * h2(gx, gy, 4);
+    return;
+  }
+
+  /* Project lights */
+  for (let k = 0; k < MARKERS.length; k++) {
+    const m = MARKERS[k], dx = wx - m.x, dy = wy - m.y, d2 = dx * dx + dy * dy;
+    if (d2 > 40000) continue;
+    const d = Math.sqrt(d2);
+    if (d < Math.max(7, cw * 0.6)) { f.kind[c] = K_MARK; f.pal[c] = k; f.len[c] = 1; return; }
+    if (Math.abs(d - 32) < Math.max(5.5, cw * 0.62)) { f.kind[c] = K_MARK; f.pal[c] = k; f.len[c] = 0; f.ang[c] = Math.atan2(dy, dx); return; }
+    light += 0.38 * Math.exp(-d2 / 8100);
+  }
+
+  /* Shadows */
+  let sh = 0;
+  for (let k = 0; k < shadowList.length; k++) {
+    const t = shadowList[k];
+    if (wx < t.sx0 || wx > t.sx1 || wy < t.sy0 || wy > t.sy1) continue;
+    const px = wx - t.x, py = wy - t.y;
+    const u = (px * SUN_X + py * SUN_Y) / t.L;
+    if (u <= 0 || u >= 1) continue;
+    const v = Math.abs(-px * SUN_Y + py * SUN_X);
+    const kk = clamp01((t.w * 1.05 * prof(u) + 4 - v) / 16 + 0.5);
+    if (kk > sh) { sh = kk; if (sh >= 1) break; }
+  }
+  const towerSh = towerVis && inTowerShadow(wx, wy);
+  if (towerSh) sh = 1;
+  const lit = Math.max(0, light * (1 - 0.74 * sh));
+
+  /* Path (stepping stones where it crosses water) */
+  if (pathField(wx, wy) > h2(gx, gy, 5) * 0.9 + 0.05) {
+    if (r0 < 0.16) return;
+    const base = 0.5 + 0.36 * h2(gx, gy, 6);
+    f.kind[c] = K_GLYPH; f.gl[c] = PATH_IX[(gx * 7 + gy * 3 & 0x7fffffff) % PATH_IX.length]; f.pal[c] = 0;
+    f.sb[c] = base * lit; f.lk[c] = base;
+    return;
+  }
+
+  /* Water */
+  const wf = waterField(wx, wy);
+  if (wf > 0) {
+    f.kind[c] = K_WATER; f.sb[c] = 0.62 + 0.45 * lit; f.lk[c] = 0.8; f.len[c] = wf;
+    f.ph[c] = h2(gx, gy, 74) * TAU;
+    f.amp[c] = h2(Math.floor(gx / 4), gy, 72) < 0.07 ? 0.45 + 0.3 * h2(gx, gy, 76) : 0; // moonlight streaks
+    if (wf > 34 && h2(gx, gy, 73) < 0.006) f.gl[c] = LILY_IX[h2(gx, gy, 75) < 0.5 ? 0 : 1];
+    return;
+  }
+
+  /* Shadow text */
+  if (sh > 0.55 && h2(gx, gy, 7) < (towerSh ? 0.94 : 0.74)) {
+    const idx = ((gy * 61 + gx) % SHADOW_IX.length + SHADOW_IX.length) % SHADOW_IX.length;
+    if (SHADOW_TEXT[idx] === " ") return;
+    const base = 0.42 + 0.32 * h2(gx, gy, 8) + (towerSh ? 0.1 : 0);
+    f.kind[c] = K_GLYPH; f.gl[c] = SHADOW_IX[idx]; f.pal[c] = 1; f.sb[c] = base * light; f.lk[c] = base * 1.4;
+    return;
+  }
+
+  /* Grass */
+  if (r0 < 0.1) return;
+  const base = 0.16 + 0.56 * h2(gx, gy, 9);
+  f.kind[c] = K_GRASS; f.sb[c] = base * lit; f.lk[c] = base;
+  f.ang[c] = -Math.PI / 2 + (h2(gx, gy, 10) - 0.5) * 1.15; f.amp[c] = 0.32;
+  f.ph[c] = wx * 0.008 + wy * 0.0035; f.len[c] = 0.5 + 0.7 * h2(gx, gy, 11);
+}
+
+function updateCache(gx0, gy0, cw, z) {
+  const n = cols * rows;
+  const full = !F || cacheZ !== z || cacheN !== n;
+  if (!full && gx0 === cacheGX && gy0 === cacheGY) return;
+  gatherTrees(gx0 * cw - cw, (gx0 + cols + 1) * cw, gy0 * cw - cw, (gy0 + rows + 1) * cw);
+  if (full) {
+    F = makeFields(n); Fb = makeFields(n);
+    for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) computeCell(F, j * cols + i, gx0 + i, gy0 + j, cw);
+  } else {
+    const dx = gx0 - cacheGX, dy = gy0 - cacheGY;
+    const i0 = Math.max(0, -dx), i1 = Math.min(cols, cols - dx);
+    for (let j = 0; j < rows; j++) {
+      const jo = j + dy;
+      if (jo < 0 || jo >= rows || i0 >= i1) {
+        for (let i = 0; i < cols; i++) computeCell(Fb, j * cols + i, gx0 + i, gy0 + j, cw);
+        continue;
+      }
+      const src = jo * cols + dx, dst = j * cols;
+      for (let q = 0; q < FIELDS.length; q++) {
+        const name = FIELDS[q];
+        Fb[name].set(F[name].subarray(src + i0, src + i1), dst + i0);
+      }
+      for (let i = 0; i < i0; i++) computeCell(Fb, dst + i, gx0 + i, gy0 + j, cw);
+      for (let i = i1; i < cols; i++) computeCell(Fb, dst + i, gx0 + i, gy0 + j, cw);
+    }
+    const t = F; F = Fb; Fb = t;
+  }
+  cacheGX = gx0; cacheGY = gy0; cacheZ = z; cacheN = n;
+}
+
+/* ── Render ───────────────────────────────────────────────── */
+let last = performance.now(), T = 0, introT = 0, dripT = 1;
+let figOv = new Int32Array(4096);
 
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
@@ -695,53 +1135,70 @@ function frame(now) {
   flicker = reduceMotion ? 1 : 0.85 + 0.15 * vnoise(T * 6, 0, 5);
 
   /* Movement */
+  const wasInWater = fig.inWater;
+  fig.inWater = waterField(fig.x, fig.y) > 6 && pathField(fig.x, fig.y) < 0.5;
   let mx = 0, my = 0;
   if (keys.has("arrowleft") || keys.has("a")) mx -= 1;
   if (keys.has("arrowright") || keys.has("d")) mx += 1;
   if (keys.has("arrowup") || keys.has("w")) my -= 1;
   if (keys.has("arrowdown") || keys.has("s")) my += 1;
-  const SPEED = 150;
+  const SPEED = 290 * (fig.inWater ? 0.55 : 1);
   fig.moving = false;
   if (mx || my) {
     const l = Math.hypot(mx, my);
     fig.x += mx / l * SPEED * dt; fig.y += my / l * SPEED * dt;
     if (mx) fig.facing = mx > 0 ? 1 : -1;
-    fig.phase += SPEED * dt * 0.085; fig.moving = true;
+    fig.phase += SPEED * dt * 0.07; fig.moving = true;
   } else if (fig.tx !== null) {
     const dx = fig.tx - fig.x, dy = fig.ty - fig.y, d = Math.hypot(dx, dy);
     if (d > 2) {
-      const step = Math.min(d, SPEED * (d > 600 ? 1.8 : 1) * dt);
+      const step = Math.min(d, SPEED * (d > 500 ? 2 : 1) * dt);
       fig.x += dx / d * step; fig.y += dy / d * step;
       if (Math.abs(dx) > 2) fig.facing = dx > 0 ? 1 : -1;
-      fig.phase += step * 0.085; fig.moving = true;
+      fig.phase += step * 0.07; fig.moving = true;
     } else fig.tx = fig.ty = null;
   }
 
+  /* Ripples: keep the simulation window around the wanderer */
+  const scx = simX0 + SW * SIMC / 2, scy = simY0 + SH * SIMC / 2;
+  if (Math.abs(fig.x - scx) > 50 * SIMC || Math.abs(fig.y - scy) > 30 * SIMC) simRecentre(fig.x, fig.y);
+  if (fig.inWater) {
+    if (!wasInWater) disturb(fig.x, fig.y, 2.4, 5);          // splash on entry
+    fig.splashT -= dt;
+    if (fig.splashT <= 0) {
+      if (fig.moving) { disturb(fig.x + (Math.sin(fig.phase) > 0 ? 7 : -7), fig.y, 1.2, 3); fig.splashT = 0.12; }
+      else { disturb(fig.x, fig.y, 0.6, 2); fig.splashT = 1.1; }  // idle bobbing
+    }
+  }
+  if (simHasWater && !reduceMotion) {
+    dripT -= dt;
+    if (dripT <= 0) { // the odd fish or falling leaf
+      dripT = 0.5 + Math.random() * 1.3;
+      const k = (Math.random() * SW * SH) | 0;
+      if (simMask[k]) disturb(simX0 + (k % SW + 0.5) * SIMC, simY0 + ((k / SW | 0) + 0.5) * SIMC, 0.8, 1);
+    }
+  }
+  if (simLive > 0) {
+    simAcc += dt;
+    let n = 0;
+    while (simAcc > 1 / 60 && n++ < 3) { simStep(); simAcc -= 1 / 60; }
+    simLive -= dt;
+  } else simAcc = 0;
+
   /* Camera */
-  const kc = reduceMotion ? 1 : 1 - Math.exp(-dt * 2.6);
+  const kc = reduceMotion ? 1 : 1 - Math.exp(-dt * 3.6);
   const kz = reduceMotion ? 1 : 1 - Math.exp(-dt * (introT < 4 ? 1.1 : 4));
   cam.x += (fig.x - cam.x) * kc;
   // On narrow screens the project card sits at the bottom, so lift the view to keep the wanderer visible.
   const lift = (activeM && W < 700) ? (H * 0.24) / cam.z : 0;
   cam.y += (fig.y - 30 + lift - cam.y) * kc;
   cam.z += (cam.zt - cam.z) * kz;
-  const z = cam.z;
+  const z = ZQ = Math.exp(Math.round(Math.log(cam.z) / 0.03) * 0.03);
   OX = Math.round(cam.x * z / CELL); OY = Math.round(cam.y * z / CELL);
   const hc = Math.floor(cols / 2), hr = Math.floor(rows / 2);
   const cw = CELL / z; // world size of one cell
-
-  /* Visible world bounds */
-  const vx0 = (OX - hc - 1) * cw, vx1 = (OX - hc + cols + 1) * cw;
-  const vy0 = (OY - hr - 1) * cw, vy1 = (OY - hr + rows + 1) * cw;
-  canopyList.length = 0; shadowList.length = 0; markerList.length = 0;
-  for (let gy = Math.floor((vy0 - 650) / TSY); gy <= Math.ceil((vy1 + 480) / TSY); gy++) {
-    for (let gx = Math.floor((vx0 - 650) / TSX); gx <= Math.ceil((vx1 + 120) / TSX); gx++) {
-      const t = treeAt(gx, gy); if (!t) continue;
-      if (t.cx1 > vx0 && t.cx0 < vx1 && t.cy1 > vy0 && t.cy0 < vy1) canopyList.push(t);
-      if (t.sx1 > vx0 && t.sx0 < vx1 && t.sy1 > vy0 && t.sy0 < vy1) shadowList.push(t);
-    }
-  }
-  for (const m of MARKERS) if (m.x > vx0 - 60 && m.x < vx1 + 60 && m.y > vy0 - 60 && m.y < vy1 + 60) markerList.push(m);
+  const gx0 = OX - hc, gy0 = OY - hr;
+  updateCache(gx0, gy0, cw, z);
 
   /* Proximity → project panel */
   let near = null, nd = 1e9;
@@ -750,201 +1207,138 @@ function frame(now) {
   showProject(near);
   for (const m of MARKERS) m.glow += ((m === near ? 1 : 0) - m.glow) * Math.min(1, dt * 4);
 
+  /* Figure overlay: the wanderer and its shadow, resolved against occluders */
+  const fi0 = Math.max(0, Math.floor((fig.x - 40 * FS) / cw) - gx0), fi1 = Math.min(cols - 1, Math.floor((fig.x + 100 * FS) / cw) - gx0);
+  const fj0 = Math.max(0, Math.floor((fig.y - 96 * FS) / cw) - gy0), fj1 = Math.min(rows - 1, Math.floor((fig.y + 50 * FS) / cw) - gy0);
+  const fw = fi1 - fi0 + 1, fh = fj1 - fj0 + 1;
+  if (fw > 0 && fh > 0) {
+    if (figOv.length < fw * fh) figOv = new Int32Array(fw * fh * 2);
+    figOv.fill(0, 0, fw * fh);
+    for (let j = fj0; j <= fj1; j++) {
+      const wy = (gy0 + j + 0.5) * cw;
+      for (let i = fi0; i <= fi1; i++) {
+        const c = j * cols + i, o = (j - fj0) * fw + (i - fi0);
+        const wx = (gx0 + i + 0.5) * cw;
+        if (F.occ[c] < fig.y && figSample(wx, wy)) {
+          const lv = Math.max(0, Math.min(LEVELS - 1, Math.round(FB * (LEVELS - 1))));
+          figOv[o] = FK === 1
+            ? (CHAR_IX["@"] + 1) | ((4 * LEVELS + lv) << 16)
+            : (RAMP_IX[Math.max(1, Math.min(9, Math.round(FB * 9)))] + 1) | ((2 * LEVELS + lv) << 16);
+        } else if (!fig.inWater && F.occ[c] < -1e8) {
+          const px = wx - fig.x, py = wy - fig.y;
+          const u = (px * SUN_X + py * SUN_Y) / (95 * FS);
+          if (u > 0 && u < 1 && Math.abs(-px * SUN_Y + py * SUN_X) < 15 * FS * prof(u) + 2) figOv[o] = -1;
+        }
+      }
+    }
+  }
+
   const lantX = fig.x + 20 * FS * fig.facing, lantY = fig.y - 6;
+  const lci = lantX / cw - gx0 - 0.5, lcj = lantY / cw - gy0 - 0.5;
+  const lr = LANT_R / cw, lr2 = lr * lr, lscale = 256 / lr2;
+  const li0 = Math.max(0, Math.floor(lci - lr)), li1 = Math.min(cols - 1, Math.ceil(lci + lr));
+  const lj0 = Math.max(0, Math.floor(lcj - lr)), lj1 = Math.min(rows - 1, Math.ceil(lcj + lr));
+  const lantAmp = 0.6 * flicker;
+
   const wind = reduceMotion ? 0 : 1;
   const bladeLen = CELL * 1.5 * Math.min(1.9, Math.max(0.75, z));
-  const tw = T * 1.25;
-
-  for (let b = 0; b < NB; b++) { grassB[b].length = 0; treeB[b].length = 0; mossB[b].length = 0; }
-  const towerVis = TOWER.sx1 > vx0 && TOWER.x0 < vx1 && TOWER.sy1 > vy0 && TOWER.top < vy1;
-  glyphs.length = 0;
-
+  const tw = T * 1.25, tw2 = T * 0.54 + 1.7;
   const tgx = fig.tx !== null ? Math.round(fig.tx / cw - 0.5) : 1e9, tgy = fig.tx !== null ? Math.round(fig.ty / cw - 0.5) : 1e9;
-  const nCan = canopyList.length, nSh = shadowList.length, nMk = markerList.length;
+  const simOn = simLive > 0;
+
+  sN = 0; gN = 0;
+  const kind = F.kind, sbA = F.sb, lkA = F.lk, angA = F.ang, ampA = F.amp, phA = F.ph, lenA = F.len, glA = F.gl, palA = F.pal;
 
   for (let j = 0; j < rows; j++) {
-    const gy = OY + j - hr;
-    const wy = (gy + 0.5) * cw;
-    const sy = H / 2 + (j - hr + 0.5) * CELL;
-    const vy = sy / H - 0.5;
+    const sy = SYA[j], row = j * cols;
+    const inFigRow = j >= fj0 && j <= fj1, inLantRow = j >= lj0 && j <= lj1;
+    const ldj = j - lcj;
     for (let i = 0; i < cols; i++) {
-      const gx = OX + i - hc;
-      const wx = (gx + 0.5) * cw;
-      const sx = W / 2 + (i - hc + 0.5) * CELL;
-      const r0 = h2(gx, gy, 1);
+      const c = row + i;
+      let shade = 1;
+      if (inFigRow && i >= fi0 && i <= fi1) {
+        const o = figOv[(j - fj0) * fw + (i - fi0)];
+        if (o > 0) { G(SXA[i], sy, (o & 0xffff) - 1, o >>> 16); continue; }
+        if (o < 0) shade = 0.37;
+      }
+      const k = kind[c];
+      if (k === 0) continue;
+      const sx = SXA[i];
+      if (gx0 + i === tgx && gy0 + j === tgy) { G(sx, sy, CHAR_IX["×"], 4 * LEVELS + 7); continue; }
 
-      /* Topmost tree canopy / trunk at this cell */
-      let best = null, bestTrunk = false, bnx = 0, bu = 0;
-      for (let k = 0; k < nCan; k++) {
-        const t = canopyList[k];
-        if (wx < t.cx0 || wx > t.cx1 || wy < t.cy0 || wy > t.cy1) continue;
-        if (best && t.y <= best.y) continue;
-        const dy = t.y - wy, dx = wx - t.x;
-        if (dy < t.trunk) {
-          if (dy >= 0 && Math.abs(dx) < t.w * 0.13 + 2) { best = t; bestTrunk = true; }
-        } else {
-          const u = (dy - t.trunk) / (t.h - t.trunk);
-          const hw = t.w * prof(u) * (0.8 + 0.4 * vnoise(wx * 0.05, wy * 0.035, t.seed));
-          if (dx > -hw && dx < hw) { best = t; bestTrunk = false; bnx = dx / hw; bu = u; }
-        }
+      let L = sbA[c] * VIG[c] * shade;
+      if (inLantRow && i >= li0 && i <= li1) {
+        const ldi = i - lci, d2 = (ldi * ldi + ldj * ldj) * lscale;
+        if (d2 < 256) L += lkA[c] * lantAmp * LANT[d2 | 0];
       }
 
-      /* Tower (occludes trees behind it) */
-      let tk = towerVis ? towerSample(wx, wy, gx, gy) : 0;
-      if (tk && best) { if (best.y > TOWER.y) tk = 0; else best = null; }
-
-      /* Figure (occluded by trees or the tower standing in front of it) */
-      if ((!best || best.y < fig.y) && (!tk || TOWER.y < fig.y) && figSample(wx, wy)) {
-        const lv = Math.max(0, Math.min(LEVELS - 1, Math.round(FB * (LEVELS - 1))));
-        if (FK === 1) glyphs.push(sx, sy, CHAR_IX["@"], 4 * LEVELS + lv);
-        else glyphs.push(sx, sy, RAMP_IX[Math.max(1, Math.min(9, Math.round(FB * 9)))], 2 * LEVELS + lv);
+      if (k <= K_MOSS) { // strokes: grass, tree, moss
+        if (k === K_GRASS && L < 0.05) continue;
+        const ph = phA[c];
+        const ang = angA[c] + wind * ampA[c] * (SIN[((tw + ph) * SK) & 4095] + 0.45 * SIN[((tw2 + ph * 1.9) * SK) & 4095]);
+        const len = bladeLen * lenA[c] * 0.5;
+        const cx = Math.cos(ang) * len, cy = Math.sin(ang) * len;
+        const bi = L >= 1 ? NB - 1 : (L * NB) | 0;
+        S(sx - cx, sy - cy, sx + cx, sy + cy, (k - 1) * NB + bi);
         continue;
       }
-
-      /* Lighting */
-      const vx = sx / W - 0.5;
-      let light = 0.62 + 0.55 * (vnoise(wx * 0.0024 + T * 0.01, wy * 0.0024, 3) - 0.5) + 0.28 * (vnoise(wx * 0.0011 - T * 0.006, wy * 0.0011, 9) - 0.5);
-      light *= 1 - 0.95 * (vx * vx + vy * vy) - 0.35 * Math.max(0, -vx - vy);
-      const lxd = wx - lantX, lyd = wy - lantY;
-      const lantern = 0.6 * Math.exp(-(lxd * lxd + lyd * lyd) / (140 * 140)) * flicker;
-
-      if (tk) {
-        if (tk === 3) continue;
-        if (tk === 2) {
-          const L = TB * (0.6 + 0.5 * Math.max(0, light)) + lantern * 0.5;
-          const bi = Math.min(NB - 1, Math.max(0, L * NB | 0));
-          // moss hangs down the wall and sways in the wind
-          const sw = wind * (0.55 * Math.sin(T * 1.6 + wx * 0.02 + wy * 0.012) + 0.35 * (vnoise(wx * 0.01 + T * 0.5, wy * 0.01, 54) - 0.5));
-          const ang = Math.PI / 2 + (h2(gx, gy, 55) - 0.5) * 1.3 + sw;
-          const len = bladeLen * (0.35 + 0.5 * h2(gx, gy, 56));
-          const c = Math.cos(ang) * len * 0.5, s = Math.sin(ang) * len * 0.5;
-          mossB[bi].push(sx - c, sy - s, sx + c, sy + s);
+      if (k === K_GLYPH) {
+        const lv = L >= 0.999 ? LEVELS - 1 : (L * LEVELS) | 0;
+        if (lv >= 1) G(sx, sy, glA[c], palA[c] * LEVELS + lv);
+        continue;
+      }
+      if (k === K_WATER) {
+        const wx = (gx0 + i + 0.5) * cw, wy = (gy0 + j + 0.5) * cw;
+        let hgt = 0, slope = 0;
+        if (simOn) {
+          const si = ((wx - simX0) / SIMC) | 0, sj = ((wy - simY0) / SIMC) | 0;
+          if (si > 0 && si < SW - 1 && sj > 0 && sj < SH - 1) {
+            const q = sj * SW + si;
+            hgt = simA[q];
+            slope = (simA[q - 1] - simA[q + 1]) + (simA[q - SW] - simA[q + SW]);
+          }
+        }
+        const ph = phA[c];
+        if (glA[c] !== NONE) { // lily pad, bobbing on the ripples
+          const lv = Math.max(2, Math.min(LEVELS - 1, ((0.55 + hgt * 0.3) * L * LEVELS) | 0));
+          G(sx, sy, glA[c], 8 * LEVELS + lv);
           continue;
         }
-        const b = TB * (0.78 + 0.5 * Math.max(0, light)) + lantern * 0.7;
-        const lv = Math.min(LEVELS - 1, b * LEVELS | 0);
-        if (lv >= 1) glyphs.push(sx, sy, TCH, 5 * LEVELS + lv);
-        continue;
-      }
-
-      if (best) {
-        if (bestTrunk) { glyphs.push(sx, sy, CHAR_IX[r0 < 0.5 ? ":" : "|"], 3 * LEVELS + 3); continue; }
-        const edge = Math.abs(bnx);
-        if (edge > 0.86 || r0 < 0.05 + 0.2 * Math.max(0, bnx)) continue; // dark rim keeps the silhouette crisp
-        const L = (0.8 - 0.42 * bnx + 0.1 * bu + 0.24 * (h2(gx, gy, 2) - 0.5)) * (0.72 + 0.4 * Math.max(0, light)) + lantern * 0.4;
-        const bi = Math.min(NB - 1, Math.max(0, L * NB | 0));
-        const sw = wind * 0.25 * Math.sin(tw + wx * 0.006 + wy * 0.002) * bu;
-        const ang = -Math.PI / 2 + (h2(gx, gy, 3) - 0.5) * 0.6 + bnx * 0.35 + sw;
-        const len = bladeLen * (0.55 + 0.5 * h2(gx, gy, 4));
-        const c = Math.cos(ang) * len * 0.5, s = Math.sin(ang) * len * 0.5;
-        treeB[bi].push(sx - c, sy - s, sx + c, sy + s);
-        continue;
-      }
-
-      /* Waypoint marker */
-      if (gx === tgx && gy === tgy) { glyphs.push(sx, sy, CHAR_IX["×"], 4 * LEVELS + 7); continue; }
-
-      /* Project lights */
-      let mk = false;
-      for (let k = 0; k < nMk; k++) {
-        const m = markerList[k];
-        const dx = wx - m.x, dy = wy - m.y, d = Math.sqrt(dx * dx + dy * dy);
-        const R = 30 + 4 * m.glow;
-        if (d < Math.max(7, cw * 0.6)) { glyphs.push(sx, sy, CHAR_IX["+"], 4 * LEVELS + 11); mk = true; break; }
-        if (Math.abs(d - R) < Math.max(5.5, cw * 0.62)) {
-          const a = Math.atan2(dy, dx);
-          const b = 0.45 + 0.35 * Math.sin(a * 3 - T * 1.8) + 0.2 * m.glow;
-          glyphs.push(sx, sy, CHAR_IX[b > 0.6 ? "*" : "·"], 4 * LEVELS + Math.max(2, Math.min(11, b * 11 | 0)));
-          mk = true; break;
+        const shore = lenA[c];
+        if (shore < 11 + 6 * SIN[((T * 1.7 + ph) * SK) & 4095] + Math.abs(hgt) * 8) { // foam along the bank
+          const b = (0.75 + 0.35 * SIN[((T * 3 + ph) * SK) & 4095] + Math.abs(slope) * 0.4) * L * 1.25;
+          const lv = Math.min(LEVELS - 1, (b * LEVELS) | 0);
+          if (lv >= 1) G(sx, sy, FOAM_IX[(ph * 0.8) | 0], 7 * LEVELS + lv);
+          continue;
         }
-        light += 0.5 * Math.exp(-(d * d) / (90 * 90)) * (0.7 + 0.3 * m.glow);
-      }
-      if (mk) continue;
-
-      /* Shadows */
-      let sh = 0;
-      for (let k = 0; k < nSh; k++) {
-        const t = shadowList[k];
-        if (wx < t.sx0 || wx > t.sx1 || wy < t.sy0 || wy > t.sy1) continue;
-        const px = wx - t.x, py = wy - t.y;
-        const u = (px * SUN_X + py * SUN_Y) / t.L;
-        if (u <= 0 || u >= 1) continue;
-        const v = Math.abs(-px * SUN_Y + py * SUN_X);
-        const hw = t.w * 1.05 * prof(u) + 4;
-        const kk = clamp01((hw - v) / 16 + 0.5);
-        if (kk > sh) { sh = kk; if (sh >= 1) break; }
-      }
-      const towerSh = towerVis && inTowerShadow(wx, wy);
-      if (towerSh) sh = 1;
-      { // the wanderer's own shadow
-        const px = wx - fig.x, py = wy - fig.y;
-        const u = (px * SUN_X + py * SUN_Y) / (95 * FS);
-        if (u > 0 && u < 1) {
-          const v = Math.abs(-px * SUN_Y + py * SUN_X);
-          if (v < 15 * FS * prof(u) + 2) sh = Math.max(sh, 0.85);
-        }
-      }
-
-      const lit = Math.max(0, light * (1 - 0.74 * sh)) + lantern;
-      const pf = pathField(wx, wy);
-
-      if (pf > h2(gx, gy, 5) * 0.9 + 0.05) {
-        if (r0 < 0.16) continue;
-        const b = (0.5 + 0.36 * h2(gx, gy, 6)) * lit;
-        const lv = Math.min(LEVELS - 1, b * LEVELS | 0);
-        if (lv < 1) continue;
-        glyphs.push(sx, sy, PATH_IX[(gx * 7 + gy * 3 & 0x7fffffff) % PATH_IX.length], lv);
+        const wave = SIN[((wx * 0.045 + T * 1.1 + 2.2 * SIN[((wy * 0.03 - T * 0.6) * SK) & 4095]) * SK) & 4095];
+        const streak = ampA[c] * (0.65 + 0.35 * SIN[((T * 1.6 + ph) * SK) & 4095]);
+        const ripple = slope * 1.9 + hgt * 0.3;                // lit crests, darker troughs
+        const v = Math.max(0.16, 0.3 + 0.13 * wave + streak + ripple);
+        const gi = Math.abs(ripple) > 0.22 ? (ripple > 0 ? 6 : 4) : Math.max(1, Math.min(6, (v * WATER_IX.length) | 0));
+        const lv = Math.max(1, Math.min(LEVELS - 1, ((v * 1.3 + Math.max(0, ripple) * 1.4) * L * LEVELS) | 0));
+        if (lv >= 1) G(sx, sy, WATER_IX[gi], 6 * LEVELS + lv);
         continue;
       }
-
-      if (sh > 0.55 && h2(gx, gy, 7) < (towerSh ? 0.94 : 0.74)) {
-        const idx = ((gy * 61 + gx) % SHADOW_IX.length + SHADOW_IX.length) % SHADOW_IX.length;
-        const b = (0.42 + 0.32 * h2(gx, gy, 8) + (towerSh ? 0.1 : 0)) * (light + lantern * 1.4);
-        const lv = Math.min(LEVELS - 1, b * LEVELS | 0);
-        if (lv >= 1 && SHADOW_TEXT[idx] !== " ") glyphs.push(sx, sy, SHADOW_IX[idx], 1 * LEVELS + lv);
-        continue;
+      if (k === K_MARK) {
+        const m = MARKERS[palA[c]];
+        if (lenA[c] === 1) { G(sx, sy, CHAR_IX["+"], 4 * LEVELS + 11); continue; }
+        const b = 0.45 + 0.35 * Math.sin(angA[c] * 3 - T * 1.8) + 0.2 * m.glow;
+        G(sx, sy, CHAR_IX[b > 0.6 ? "*" : "·"], 4 * LEVELS + Math.max(2, Math.min(11, b * 11 | 0)));
       }
-
-      if (r0 < 0.1) continue;
-      const L = (0.16 + 0.56 * h2(gx, gy, 9)) * lit;
-      if (L < 0.05) continue;
-      const bi = Math.min(NB - 1, L * NB | 0);
-      const sw = wind * (0.32 * Math.sin(tw + wx * 0.008 + wy * 0.0035) + 0.18 * (vnoise(wx * 0.004 + T * 0.35, wy * 0.004, 4) - 0.5));
-      const ang = -Math.PI / 2 + (h2(gx, gy, 10) - 0.5) * 1.15 + sw;
-      const len = bladeLen * (0.5 + 0.7 * h2(gx, gy, 11));
-      const c = Math.cos(ang) * len * 0.5, s = Math.sin(ang) * len * 0.5;
-      grassB[bi].push(sx - c, sy - s, sx + c, sy + s);
     }
   }
 
   /* Draw */
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.globalCompositeOperation = "source-over";
-  ctx.fillStyle = "#04070a";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  ctx.lineCap = "round";
   const lwBase = Math.max(0.75, 0.95 * Math.sqrt(z) * CELL / 7);
-  for (const [B, C, LW] of [[grassB, GRASS_COLS, 1], [treeB, TREE_COLS, 1.45], [mossB, MOSS_COLS, 1.2]]) {
-    ctx.lineWidth = lwBase * LW;
-    for (let b = 0; b < NB; b++) {
-      const a = B[b]; if (!a.length) continue;
-      ctx.strokeStyle = C[b];
-      ctx.beginPath();
-      for (let k = 0; k < a.length; k += 4) { ctx.moveTo(a[k], a[k + 1]); ctx.lineTo(a[k + 2], a[k + 3]); }
-      ctx.stroke();
-    }
-  }
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  const half = AC / 2;
-  for (let k = 0; k < glyphs.length; k += 4) {
-    ctx.drawImage(atlas, glyphs[k + 2] * AC, glyphs[k + 3] * AC, AC, AC,
-      Math.round(glyphs[k] * DPR - half), Math.round(glyphs[k + 1] * DPR - half), AC, AC);
-  }
+  const widths = [lwBase, lwBase * 1.45, lwBase * 1.2];
+  if (gpu) gpu.draw(widths); else draw2d(widths);
 
-  /* Fireflies + lantern bloom */
-  ctx.globalCompositeOperation = "lighter";
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  /* Fireflies + lantern bloom (separate overlay canvas) */
+  fx.setTransform(1, 0, 0, 1, 0, 0);
+  fx.clearRect(0, 0, fxCanvas.width, fxCanvas.height);
+  fx.globalCompositeOperation = "lighter";
+  fx.setTransform(DPR, 0, 0, DPR, 0, 0);
   const vw = W / z, vh = H / z;
   for (const f of flies) {
     if (!reduceMotion) {
@@ -956,18 +1350,17 @@ function frame(now) {
     const a = reduceMotion ? 0.5 : Math.max(0, Math.sin(T * (0.6 + (f.s % 1)) + f.s));
     if (a < 0.05) continue;
     const [px, py] = toScreen(f.x, f.y);
-    ctx.globalAlpha = a * 0.75;
+    fx.globalAlpha = a * 0.75;
     const sz = 7 + 4 * a;
-    ctx.drawImage(glow, px - sz / 2, py - sz / 2, sz, sz);
+    fx.drawImage(glow, px - sz / 2, py - sz / 2, sz, sz);
   }
   {
     const [px, py] = toScreen(fig.x + 20 * FS * fig.facing, fig.y - 33 * FS);
-    ctx.globalAlpha = 0.3 * flicker;
+    fx.globalAlpha = 0.3 * flicker;
     const sz = 70 * z;
-    ctx.drawImage(glow, px - sz / 2, py - sz / 2, sz, sz);
+    fx.drawImage(glow, px - sz / 2, py - sz / 2, sz, sz);
   }
-  ctx.globalAlpha = 1;
-  ctx.globalCompositeOperation = "source-over";
+  fx.globalAlpha = 1;
 
   /* HTML labels */
   {
