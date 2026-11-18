@@ -239,7 +239,7 @@ const SITE = {
       tags: ["Figma", "React", "Typography"], url: "#", at: [0, 620] },
     { title: "Fieldnotes", year: "2025", kind: "Creative coding",
       desc: "Generative ASCII landscapes rendered in the browser — the experiment that grew into this site.",
-      tags: ["Canvas", "Noise", "Shaders"], url: "#", at: [0, -680] },
+      tags: ["Canvas", "Noise", "Shaders"], url: "#", at: [0, 1060] },
     { title: "Harbor", year: "2025", kind: "Design system",
       desc: "A component library and token pipeline shared across four product teams, with docs people actually read.",
       tags: ["Tokens", "Storybook", "Accessibility"], url: "#", at: [1, 560] },
@@ -292,6 +292,7 @@ const PATHS = [
   { ang: -0.30, off: 0,    a1: 110, f1: 1 / 640, a2: 36, f2: 1 / 230, w: 36 },
   { ang: 1.20,  off: -420, a1: 90,  f1: 1 / 520, a2: 30, f2: 1 / 170, w: 30 }
 ];
+const PATH0_START = -330;
 let pathDist = 0; // side output of pathField: signed distance to nearest path edge
 function pathField(x, y) {
   let m = 0; pathDist = 1e9;
@@ -302,7 +303,9 @@ function pathField(x, y) {
     const center = p.a1 * Math.sin(u * p.f1) + p.a2 * Math.sin(u * p.f2 + 1.3);
     const d = Math.abs(v - center);
     const w = p.w * (0.78 + 0.44 * vnoise(u * 0.012, i * 7.3, 7));
-    const k = clamp01((w - d) / 24 + 0.5);
+    const fade = i === 0 ? clamp01((u - PATH0_START) / 40) : 1;
+    if (fade <= 0) continue;
+    const k = clamp01((w - d) / 24 + 0.5) * fade;
     if (k > m) m = k;
     if (d - w < pathDist) pathDist = d - w;
   }
@@ -322,6 +325,78 @@ const MARKERS = SITE.projects.map((p, i) => {
 
 const SUN_X = 0.89, SUN_Y = 0.46;         // shadow direction (sun/moon from upper-left)
 const SHADOW_LEN = 1.25;
+
+/* ── The tower: a mossy ruin at the end of the path (holds the About card) ── */
+const DOOR = pathPoint(0, PATH0_START, 0);
+const TOWER = (() => {
+  const w = 300, fh = 480, rd = 230, x = DOOR.x, y = DOOR.y + 10;
+  const L = fh * 1.15;
+  return { x, y, w, fh, rd, L, x0: x - w / 2, x1: x + w / 2, roofY: y - fh, top: y - fh - rd,
+           sx1: x + w / 2 + SUN_X * L, sy1: y + SUN_Y * L };
+})();
+const ABOUT_SPOT = { about: true, x: DOOR.x, y: DOOR.y + 44 };
+let TB = 0, TCH = 0; // side outputs of towerSample: brightness, glyph
+function mossAt(x, y) { return vnoise(x * 0.016, y * 0.016, 50) * 0.7 + vnoise(x * 0.05, y * 0.05, 51) * 0.3; }
+/* 0 = not tower, 1 = stone glyph, 2 = moss stroke, 3 = dark (door, slits, mortar) */
+function towerSample(wx, wy, gx, gy) {
+  const t = TOWER;
+  if (wx < t.x0 || wx > t.x1 || wy < t.top || wy > t.y) return 0;
+  const edgeD = Math.min(wx - t.x0, t.x1 - wx, wy - t.top);
+  if (edgeD < 14 * vnoise(wx * 0.07, wy * 0.07, 60)) return 0; // crumbling silhouette
+  const dx = wx - t.x, lx = dx / (t.w / 2), h = t.y - wy;
+  const onRoof = wy <= t.roofY;
+
+  // door and arrow slits stay pitch dark
+  if (!onRoof) {
+    if (Math.abs(dx) < 36 && (h < 92 || dx * dx + (h - 92) * (h - 92) < 1296)) return 3;
+    for (const sx of [-82, 0, 82]) {
+      const ex = dx - sx, eh = h - (sx ? 280 : 330);
+      if (Math.abs(ex) < 5 && ((eh > 0 && eh < 50) || (eh >= 50 && ex * ex + (eh - 50) * (eh - 50) < 25))) return 3;
+    }
+  }
+
+  // moss: blotches plus per-column drips that hang down the wall
+  const drip = 46 * h2(gx, 0, 52);
+  let moss = Math.max(mossAt(wx, wy), mossAt(wx, wy - drip) * 0.95);
+  if (!onRoof) moss += 0.16 * clamp01(1 - h / (t.fh * 0.5));
+  if (edgeD < 26) moss += 0.08;
+  if (onRoof && (t.roofY - wy) < 26) moss += 0.1;
+  if (moss > 0.69) { const r2 = h2(gx, gy, 53); TB = 0.18 + 0.55 * r2 * r2 + (moss - 0.69) * 1.4; return 2; }
+
+  const r = h2(gx, gy, 42);
+  TCH = STONE_IX[(r * STONE_IX.length) | 0];
+  if (onRoof) {
+    const ry = wy - t.top, by = t.roofY - wy, bxl = wx - t.x0, bxr = t.x1 - wx;
+    const pd = Math.min(bxl, bxr, ry, by);
+    if (pd < 17) { // crenellated parapet
+      const along = (pd === ry || pd === by) ? wx : wy;
+      const merlon = (Math.floor((along + 400) / 26) & 1) === 0;
+      TB = merlon ? 0.85 + 0.15 * r : 0.38;
+      if (pd > 14) TB *= 0.4;
+      return 1;
+    }
+    const fx = (wx - t.x0) % 30, fy = (wy - t.top) % 30;
+    if (fx < 2.5 || fy < 2.5) return 3;
+    TB = 0.3 + 0.18 * h2(Math.floor((wx - t.x0) / 30), Math.floor((wy - t.top) / 30), 43);
+    if (ry < 44 || bxl < 40) TB *= 0.55; // parapet shadow on the floor
+    return 1;
+  }
+  if (h > t.fh - 12) { TB = 0.95; TCH = CHAR_IX[r < 0.5 ? "=" : "#"]; return 1; } // cornice
+  if (h > t.fh - 22) { TB = 0.3; return 1; }
+  const row = Math.floor(h / 20), off = (row & 1) * 21;
+  const bx = dx + 500 + off, fx = bx % 42, fy = h % 20;
+  if (fx < 2.4 || fy < 2.2) return 3; // mortar
+  TB = (0.55 + 0.3 * h2(Math.floor(bx / 42), row, 41) - 0.2 * lx + 0.1 * (h / t.fh)) * (0.55 + 0.45 * clamp01(h / 90));
+  if (r < 0.06) return 3; // cracks
+  return 1;
+}
+function inTowerShadow(wx, wy) {
+  const t = TOWER;
+  if (wx < t.x0 || wx > t.sx1 || wy < t.y - t.rd || wy > t.sy1) return false;
+  const lo = Math.max(0, (wx - t.x1) / SUN_X, (wy - t.y) / SUN_Y);
+  const hi = Math.min(t.L, (wx - t.x0) / SUN_X, (wy - (t.y - t.rd)) / SUN_Y);
+  return lo <= hi;
+}
 const TSX = 250, TSY = 560;               // tree grid spacing
 const treeCache = new Map();
 function treeAt(gx, gy) {
@@ -337,6 +412,7 @@ function treeAt(gx, gy) {
     pathField(x, y);
     let ok = pathDist > w * 0.8 + 6;
     if (ok && Math.hypot(x - SPAWN.x, y - SPAWN.y) < 170) ok = false;
+    if (ok && x > TOWER.x0 - w - 20 && x < TOWER.x1 + w + 20 && y > TOWER.top - 30 && y < TOWER.y + 90) ok = false;
     for (const m of MARKERS) if (ok && Math.hypot(x - m.x, y - m.y) < 190) ok = false;
     if (ok) {
       const L = h * SHADOW_LEN;
@@ -393,20 +469,23 @@ function figSample(wx, wy) {
 /* ── Glyph atlas ──────────────────────────────────────────── */
 const RAMP = " .:-=+*#%@";
 const PATH_CHARS = "@Q08o@Qo8Q@";
+const STONE_CHARS = "$Q0&8%dbqpWM#@BNwmzxk(/\\|";
 const SHADOW_TEXT = (SITE.about.join(" ") + " " + SITE.projects.map(p => p.title + " " + p.desc).join(" ") + " ")
   .toLowerCase().replace(/[^\x21-\x7e ]/g, "").replace(/\s+/g, " ").replace(/ /g, () => "  ;:^|!*".charAt(Math.random() * 8 | 0));
-const CHARS = Array.from(new Set((RAMP + PATH_CHARS + SHADOW_TEXT + ":|*+·×").split(""))).join("");
+const CHARS = Array.from(new Set((RAMP + PATH_CHARS + STONE_CHARS + SHADOW_TEXT + ":|*+·×").split(""))).join("");
 const CHAR_IX = {}; for (let i = 0; i < CHARS.length; i++) CHAR_IX[CHARS[i]] = i;
 const SHADOW_IX = Array.from(SHADOW_TEXT, c => CHAR_IX[c]);
 const PATH_IX = Array.from(PATH_CHARS, c => CHAR_IX[c]);
 const RAMP_IX = Array.from(RAMP, c => CHAR_IX[c]);
+const STONE_IX = Array.from(STONE_CHARS, c => CHAR_IX[c]);
 
 const PALS = [
   [198, 192, 216], // 0 path — pale lavender
   [124, 158, 148], // 1 shadow text — grey green
   [238, 238, 233], // 2 figure — moon white
   [150, 152, 162], // 3 trunk
-  [255, 204, 126]  // 4 warm lantern / lights
+  [255, 204, 126], // 4 warm lantern / lights
+  [214, 222, 246]  // 5 tower stone — cold moonlit white
 ];
 const LEVELS = 12;
 let atlas, AC = 0; // atlas canvas, atlas cell size (device px)
@@ -439,7 +518,9 @@ function ramp(dark, bright, gamma) {
 }
 const GRASS_COLS = ramp([8, 28, 30], [120, 226, 192], 1.25);
 const TREE_COLS = ramp([10, 40, 32], [104, 206, 150], 0.95);
+const MOSS_COLS = ramp([12, 30, 14], [178, 214, 104], 1.5);
 const grassB = Array.from({ length: NB }, () => []);
+const mossB = Array.from({ length: NB }, () => []);
 const treeB = Array.from({ length: NB }, () => []);
 const glyphs = [];
 
@@ -462,7 +543,7 @@ const cam = { x: SPAWN.x, y: SPAWN.y - 30, z: reduceMotion ? 1.15 : 0.72, zt: 1.
 function resize() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
   W = window.innerWidth; H = window.innerHeight;
-  CELL = (W < 700 ? 8 : 9) + CELL_BUMP;
+  CELL = (W < 700 ? 5 : 6) + CELL_BUMP;
   canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
   cols = Math.ceil(W / CELL) + 2; rows = Math.ceil(H / CELL) + 2;
   buildAtlas();
@@ -496,12 +577,19 @@ MARKERS.forEach(m => {
   m.el = el;
 });
 
+const towerLabel = document.createElement("button");
+towerLabel.type = "button"; towerLabel.className = "mlabel"; towerLabel.tabIndex = -1;
+towerLabel.innerHTML = "<span>the tower</span>about";
+towerLabel.addEventListener("click", e => { e.stopPropagation(); walkTo(ABOUT_SPOT.x, ABOUT_SPOT.y); });
+labelsEl.appendChild(towerLabel);
+
 /* ── Input ────────────────────────────────────────────────── */
 const keys = new Set();
 function walkTo(x, y) { fig.tx = x; fig.ty = y; }
 canvas.addEventListener("click", e => {
   const [wx, wy] = toWorld(e.clientX, e.clientY);
   for (const m of MARKERS) if (Math.hypot(wx - m.x, wy - m.y) < 50) return walkTo(m.x - 64, m.y + 18);
+  if (wx > TOWER.x0 && wx < TOWER.x1 && wy > TOWER.top && wy < TOWER.y) return walkTo(ABOUT_SPOT.x, ABOUT_SPOT.y);
   walkTo(wx, wy);
 });
 canvas.addEventListener("wheel", e => {
@@ -569,6 +657,20 @@ function showProject(m) {
   if (m === activeM) return;
   activeM = m;
   if (!m) { panel.classList.remove("open"); return; }
+  if (m.about) {
+    const tools = (SITE.facts.find(f => f[0] === "tools") || ["", ""])[1];
+    document.getElementById("p-idx").textContent = "the tower";
+    document.getElementById("p-title").textContent = "About " + SITE.name.split(" ")[0];
+    document.getElementById("p-meta").textContent = SITE.role;
+    document.getElementById("p-desc").textContent = SITE.about.join(" ");
+    document.getElementById("p-tags").innerHTML = tools.split(/,\s*/).filter(Boolean).map(t => `<li>${esc(t)}</li>`).join("");
+    const link = document.getElementById("p-link");
+    link.href = "mailto:" + SITE.email; link.hidden = false;
+    link.firstChild.textContent = "say hello ";
+    panel.classList.add("open");
+    return;
+  }
+  document.getElementById("p-link").firstChild.textContent = "view project ";
   document.getElementById("p-idx").textContent = `${String(m.i + 1).padStart(2, "0")} / ${String(MARKERS.length).padStart(2, "0")}`;
   document.getElementById("p-title").textContent = m.title;
   document.getElementById("p-meta").textContent = `${m.year} · ${m.kind}`;
@@ -589,7 +691,7 @@ function frame(now) {
   T += dt; introT += dt;
   /* Adaptive quality: coarser glyph grid on slow machines */
   slowFor = dt > 0.034 ? slowFor + dt : Math.max(0, slowFor - dt * 0.5);
-  if (slowFor > 1.5 && CELL_BUMP < 3) { CELL_BUMP++; slowFor = 0; resize(); }
+  if (slowFor > 1.5 && CELL_BUMP < 4) { CELL_BUMP++; slowFor = 0; resize(); }
   flicker = reduceMotion ? 1 : 0.85 + 0.15 * vnoise(T * 6, 0, 5);
 
   /* Movement */
@@ -644,15 +746,17 @@ function frame(now) {
   /* Proximity → project panel */
   let near = null, nd = 1e9;
   for (const m of MARKERS) { const d = Math.hypot(fig.x - m.x, fig.y - m.y); if (d < 120 && d < nd) { nd = d; near = m; } }
+  if (Math.hypot(fig.x - ABOUT_SPOT.x, fig.y - ABOUT_SPOT.y) < 70 && nd > 60) near = ABOUT_SPOT;
   showProject(near);
   for (const m of MARKERS) m.glow += ((m === near ? 1 : 0) - m.glow) * Math.min(1, dt * 4);
 
   const lantX = fig.x + 20 * FS * fig.facing, lantY = fig.y - 6;
   const wind = reduceMotion ? 0 : 1;
-  const bladeLen = CELL * 1.25 * Math.min(1.9, Math.max(0.75, z));
+  const bladeLen = CELL * 1.5 * Math.min(1.9, Math.max(0.75, z));
   const tw = T * 1.25;
 
-  for (let b = 0; b < NB; b++) { grassB[b].length = 0; treeB[b].length = 0; }
+  for (let b = 0; b < NB; b++) { grassB[b].length = 0; treeB[b].length = 0; mossB[b].length = 0; }
+  const towerVis = TOWER.sx1 > vx0 && TOWER.x0 < vx1 && TOWER.sy1 > vy0 && TOWER.top < vy1;
   glyphs.length = 0;
 
   const tgx = fig.tx !== null ? Math.round(fig.tx / cw - 0.5) : 1e9, tgy = fig.tx !== null ? Math.round(fig.ty / cw - 0.5) : 1e9;
@@ -685,8 +789,12 @@ function frame(now) {
         }
       }
 
-      /* Figure (occluded by trees standing in front of it) */
-      if ((!best || best.y < fig.y) && figSample(wx, wy)) {
+      /* Tower (occludes trees behind it) */
+      let tk = towerVis ? towerSample(wx, wy, gx, gy) : 0;
+      if (tk && best) { if (best.y > TOWER.y) tk = 0; else best = null; }
+
+      /* Figure (occluded by trees or the tower standing in front of it) */
+      if ((!best || best.y < fig.y) && (!tk || TOWER.y < fig.y) && figSample(wx, wy)) {
         const lv = Math.max(0, Math.min(LEVELS - 1, Math.round(FB * (LEVELS - 1))));
         if (FK === 1) glyphs.push(sx, sy, CHAR_IX["@"], 4 * LEVELS + lv);
         else glyphs.push(sx, sy, RAMP_IX[Math.max(1, Math.min(9, Math.round(FB * 9)))], 2 * LEVELS + lv);
@@ -699,6 +807,25 @@ function frame(now) {
       light *= 1 - 0.95 * (vx * vx + vy * vy) - 0.35 * Math.max(0, -vx - vy);
       const lxd = wx - lantX, lyd = wy - lantY;
       const lantern = 0.6 * Math.exp(-(lxd * lxd + lyd * lyd) / (140 * 140)) * flicker;
+
+      if (tk) {
+        if (tk === 3) continue;
+        if (tk === 2) {
+          const L = TB * (0.6 + 0.5 * Math.max(0, light)) + lantern * 0.5;
+          const bi = Math.min(NB - 1, Math.max(0, L * NB | 0));
+          // moss hangs down the wall and sways in the wind
+          const sw = wind * (0.55 * Math.sin(T * 1.6 + wx * 0.02 + wy * 0.012) + 0.35 * (vnoise(wx * 0.01 + T * 0.5, wy * 0.01, 54) - 0.5));
+          const ang = Math.PI / 2 + (h2(gx, gy, 55) - 0.5) * 1.3 + sw;
+          const len = bladeLen * (0.35 + 0.5 * h2(gx, gy, 56));
+          const c = Math.cos(ang) * len * 0.5, s = Math.sin(ang) * len * 0.5;
+          mossB[bi].push(sx - c, sy - s, sx + c, sy + s);
+          continue;
+        }
+        const b = TB * (0.78 + 0.5 * Math.max(0, light)) + lantern * 0.7;
+        const lv = Math.min(LEVELS - 1, b * LEVELS | 0);
+        if (lv >= 1) glyphs.push(sx, sy, TCH, 5 * LEVELS + lv);
+        continue;
+      }
 
       if (best) {
         if (bestTrunk) { glyphs.push(sx, sy, CHAR_IX[r0 < 0.5 ? ":" : "|"], 3 * LEVELS + 3); continue; }
@@ -747,6 +874,8 @@ function frame(now) {
         const kk = clamp01((hw - v) / 16 + 0.5);
         if (kk > sh) { sh = kk; if (sh >= 1) break; }
       }
+      const towerSh = towerVis && inTowerShadow(wx, wy);
+      if (towerSh) sh = 1;
       { // the wanderer's own shadow
         const px = wx - fig.x, py = wy - fig.y;
         const u = (px * SUN_X + py * SUN_Y) / (95 * FS);
@@ -761,16 +890,16 @@ function frame(now) {
 
       if (pf > h2(gx, gy, 5) * 0.9 + 0.05) {
         if (r0 < 0.16) continue;
-        const b = (0.32 + 0.28 * h2(gx, gy, 6)) * lit;
+        const b = (0.5 + 0.36 * h2(gx, gy, 6)) * lit;
         const lv = Math.min(LEVELS - 1, b * LEVELS | 0);
         if (lv < 1) continue;
         glyphs.push(sx, sy, PATH_IX[(gx * 7 + gy * 3 & 0x7fffffff) % PATH_IX.length], lv);
         continue;
       }
 
-      if (sh > 0.55 && h2(gx, gy, 7) < 0.58) {
+      if (sh > 0.55 && h2(gx, gy, 7) < (towerSh ? 0.94 : 0.74)) {
         const idx = ((gy * 61 + gx) % SHADOW_IX.length + SHADOW_IX.length) % SHADOW_IX.length;
-        const b = (0.3 + 0.25 * h2(gx, gy, 8)) * (light + lantern * 1.4);
+        const b = (0.42 + 0.32 * h2(gx, gy, 8) + (towerSh ? 0.1 : 0)) * (light + lantern * 1.4);
         const lv = Math.min(LEVELS - 1, b * LEVELS | 0);
         if (lv >= 1 && SHADOW_TEXT[idx] !== " ") glyphs.push(sx, sy, SHADOW_IX[idx], 1 * LEVELS + lv);
         continue;
@@ -795,8 +924,8 @@ function frame(now) {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.lineCap = "round";
-  const lwBase = Math.max(1, 1.15 * Math.sqrt(z));
-  for (const [B, C, LW] of [[grassB, GRASS_COLS, 1], [treeB, TREE_COLS, 1.45]]) {
+  const lwBase = Math.max(0.75, 0.95 * Math.sqrt(z) * CELL / 7);
+  for (const [B, C, LW] of [[grassB, GRASS_COLS, 1], [treeB, TREE_COLS, 1.45], [mossB, MOSS_COLS, 1.2]]) {
     ctx.lineWidth = lwBase * LW;
     for (let b = 0; b < NB; b++) {
       const a = B[b]; if (!a.length) continue;
@@ -851,6 +980,12 @@ function frame(now) {
     const on = px > -100 && px < W + 100 && py > -40 && py < H + 40;
     m.el.style.visibility = on ? "visible" : "hidden";
     if (on) m.el.style.transform = `translate(${Math.round(px)}px, ${Math.round(py) - lift}px) translate(-50%, -100%)`;
+  }
+  {
+    const [px, py] = toScreen(DOOR.x, TOWER.y - 132);
+    const on = px > -100 && px < W + 100 && py > -40 && py < H + 60;
+    towerLabel.style.visibility = on ? "visible" : "hidden";
+    if (on) towerLabel.style.transform = `translate(${Math.round(px)}px, ${Math.round(py)}px) translate(-50%, -100%)`;
   }
   coordsEl.textContent = `x ${String(Math.round(fig.x / 10)).padStart(4, " ")}  y ${String(Math.round(-fig.y / 10)).padStart(4, " ")}  ·  ${z.toFixed(2)}×`;
 

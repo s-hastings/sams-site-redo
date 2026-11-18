@@ -1,6 +1,6 @@
 # sams-site-redo
 
-A one-page portfolio set in a moonlit field rendered entirely in glyphs: teal grass strokes, cypress trees, shadows woven from your own bio text, and a path of `@Q08` characters. You walk a small lantern-carrying figure through the field; each glowing ring is a project, and reaching one opens its card.
+A one-page portfolio set in a moonlit field rendered entirely in glyphs: teal grass strokes, cypress trees, shadows woven from your own bio text, and a path of `@Q08` characters. You walk a small lantern-carrying figure through the field; each glowing ring is a project, and reaching one opens its card. The path ends at a ruined stone tower built from dense glyphs and swaying moss. Its arched door opens the About card.
 
 ## Run it
 
